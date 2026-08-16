@@ -1,0 +1,379 @@
+/* ---------------------------------------------------------------------------
+   Design tokens. Apple-flavoured: system typography, generous radii, hairline
+   separators, translucent chrome, one accent colour. Light and dark are the
+   same tokens with different values, so components never branch on scheme.
+   --------------------------------------------------------------------------- */
+
+:root {
+    color-scheme: light dark;
+
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+        "Helvetica Neue", Inter, system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --font-rounded: -apple-system, BlinkMacSystemFont, "SF Pro Rounded",
+        "SF Pro Display", var(--font-ui);
+
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 18px;
+    --r-xl: 26px;
+    --r-pill: 999px;
+
+    --ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --dur: 0.22s;
+
+    --blue: #007aff;
+    --green: #34c759;
+    --red: #ff3b30;
+    --orange: #ff9500;
+    --yellow: #ffcc00;
+    --purple: #af52de;
+    --teal: #30b0c7;
+    --pink: #ff2d55;
+}
+
+/* Light */
+:root {
+    --bg: #f2f2f7;
+    --bg-elevated: #ffffff;
+    --fill: rgba(120, 120, 128, 0.12);
+    --fill-strong: rgba(120, 120, 128, 0.2);
+    --chrome: rgba(255, 255, 255, 0.72);
+    --separator: rgba(60, 60, 67, 0.14);
+    --separator-strong: rgba(60, 60, 67, 0.29);
+    --label: #000000;
+    --label-2: rgba(60, 60, 67, 0.62);
+    --label-3: rgba(60, 60, 67, 0.4);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 14px rgba(0, 0, 0, 0.06);
+    --shadow-2: 0 10px 40px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
+    --felt-1: #1f7a52;
+    --felt-2: #0f4f36;
+    --card-face: #ffffff;
+    --card-ink: #1c1c1e;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --bg: #000000;
+        --bg-elevated: #1c1c1e;
+        --fill: rgba(120, 120, 128, 0.24);
+        --fill-strong: rgba(120, 120, 128, 0.36);
+        --chrome: rgba(30, 30, 32, 0.72);
+        --separator: rgba(84, 84, 88, 0.5);
+        --separator-strong: rgba(84, 84, 88, 0.85);
+        --label: #ffffff;
+        --label-2: rgba(235, 235, 245, 0.6);
+        --label-3: rgba(235, 235, 245, 0.38);
+        --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 20px rgba(0, 0, 0, 0.35);
+        --shadow-2: 0 16px 50px rgba(0, 0, 0, 0.6), 0 2px 10px rgba(0, 0, 0, 0.4);
+        --blue: #0a84ff;
+        --green: #30d158;
+        --red: #ff453a;
+        --orange: #ff9f0a;
+        --yellow: #ffd60a;
+        --purple: #bf5af2;
+        --teal: #40c8e0;
+        --pink: #ff375f;
+        --felt-1: #146543;
+        --felt-2: #06301f;
+        --card-face: #f7f7f9;
+        --card-ink: #111114;
+    }
+}
+
+:root[data-theme="dark"] {
+    --bg: #000000;
+    --bg-elevated: #1c1c1e;
+    --fill: rgba(120, 120, 128, 0.24);
+    --fill-strong: rgba(120, 120, 128, 0.36);
+    --chrome: rgba(30, 30, 32, 0.72);
+    --separator: rgba(84, 84, 88, 0.5);
+    --separator-strong: rgba(84, 84, 88, 0.85);
+    --label: #ffffff;
+    --label-2: rgba(235, 235, 245, 0.6);
+    --label-3: rgba(235, 235, 245, 0.38);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 20px rgba(0, 0, 0, 0.35);
+    --shadow-2: 0 16px 50px rgba(0, 0, 0, 0.6), 0 2px 10px rgba(0, 0, 0, 0.4);
+    --blue: #0a84ff;
+    --green: #30d158;
+    --red: #ff453a;
+    --orange: #ff9f0a;
+    --yellow: #ffd60a;
+    --purple: #bf5af2;
+    --teal: #40c8e0;
+    --pink: #ff375f;
+    --felt-1: #146543;
+    --felt-2: #06301f;
+    --card-face: #f7f7f9;
+    --card-ink: #111114;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    color: var(--label);
+    background: var(--bg);
+    font-family: var(--font-ui);
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior-y: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+    margin: 0;
+    font-weight: 700;
+    letter-spacing: -0.021em;
+}
+
+h1 {
+    font-size: 34px;
+    letter-spacing: -0.03em;
+}
+
+h2 {
+    font-size: 22px;
+}
+
+h3 {
+    font-size: 17px;
+}
+
+a {
+    color: var(--blue);
+    text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+    color: inherit;
+}
+
+:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--blue) 55%, transparent);
+    outline-offset: 2px;
+    border-radius: 6px;
+}
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--fill-strong);
+    border: 3px solid transparent;
+    border-radius: var(--r-pill);
+    background-clip: content-box;
+}
+
+/* --- primitives ---------------------------------------------------------- */
+
+.card {
+    background: var(--bg-elevated);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-1);
+}
+
+.hair {
+    height: 1px;
+    background: var(--separator);
+}
+
+.eyebrow {
+    color: var(--label-2);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.muted {
+    color: var(--label-2);
+}
+
+.mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+.tnum {
+    font-variant-numeric: tabular-nums;
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 38px;
+    padding: 0 16px;
+    border: none;
+    border-radius: var(--r-pill);
+    background: var(--fill);
+    color: var(--label);
+    font-size: 15px;
+    font-weight: 590;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: transform var(--dur) var(--ease), background-color var(--dur) var(--ease),
+        opacity var(--dur) var(--ease);
+}
+
+.btn:hover {
+    background: var(--fill-strong);
+}
+
+.btn:active {
+    transform: scale(0.96);
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+    transform: none;
+}
+
+.btn-primary {
+    background: var(--blue);
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: color-mix(in srgb, var(--blue) 88%, #000);
+}
+
+.btn-danger {
+    background: color-mix(in srgb, var(--red) 16%, transparent);
+    color: var(--red);
+}
+
+.btn-danger:hover {
+    background: color-mix(in srgb, var(--red) 26%, transparent);
+}
+
+.btn-success {
+    background: color-mix(in srgb, var(--green) 18%, transparent);
+    color: color-mix(in srgb, var(--green) 78%, var(--label));
+}
+
+.btn-success:hover {
+    background: color-mix(in srgb, var(--green) 28%, transparent);
+}
+
+.btn-sm {
+    min-height: 30px;
+    padding: 0 12px;
+    font-size: 13px;
+}
+
+.field {
+    width: 100%;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--separator);
+    border-radius: var(--r-md);
+    background: var(--bg-elevated);
+    font-size: 16px;
+    transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.field:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent);
+}
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: var(--r-pill);
+    background: var(--fill);
+    color: var(--label-2);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.stack-v {
+    display: flex;
+    flex-direction: column;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.spacer {
+    flex: 1;
+}
+
+.page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 24px 20px 64px;
+}
+
+@media (max-width: 640px) {
+    .page {
+        padding: 16px 14px 48px;
+    }
+
+    h1 {
+        font-size: 28px;
+    }
+}
+
+/* --- transitions --------------------------------------------------------- */
+
+.fade-enter-active,
+.fade-leave-active {
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+    opacity: 0;
+    transform: translateY(6px);
+}
+
+.pop-enter-active {
+    transition: opacity 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+.pop-leave-active {
+    transition: opacity 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.pop-enter-from,
+.pop-leave-to {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}

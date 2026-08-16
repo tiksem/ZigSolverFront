@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Messages</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #messages {
+            flex-grow: 1;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+
+        .message-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+            transition: background-color 0.3s ease;
+        }
+
+        .message {
+            flex-grow: 1;
+            margin-right: 10px;
+            white-space: pre-wrap;
+        }
+
+        h3 {
+            text-align: center;
+            padding: 10px;
+            margin: 0;
+            background-color: #f1f1f1;
+            border-bottom: 1px solid #ccc;
+        }
+
+        #botButton {
+            margin: 10px;
+            align-self: center;
+            font-size: 32px;
+        }
+
+        #autoEnableBotButton {
+            margin: 10px;
+            align-self: center;
+            font-size: 32px;
+        }
+    </style>
+</head>
+<body>
+<h3>WebSocket Messages</h3>
+<div id="messages"></div>
+
+<table>
+    <tr>
+        <td>
+            <button id="botButton">Bot</button>
+        </td>
+        <td>
+            <button id="autoEnableBotButton">AutoBot</button>
+        </td>
+    </tr>
+</table>
+
+<script>
+    const RECONNECT_DELAY = 5000; // 5 seconds
+    const messagesContainer = document.getElementById('messages');
+    const botButton = document.getElementById('botButton');
+    const autoEnableBotButton = document.getElementById('autoEnableBotButton');
+
+    let socket;
+
+    function connectWebSocket() {
+        socket = new WebSocket('ws://' + window.location.host + "/commands?tableIndex=" + 96782);
+
+        socket.onopen = function () {
+            console.log('WebSocket connected');
+        };
+
+        socket.onmessage = function (event) {
+            const newMessage = event.data.replace(/\n/g, '<br>');
+            if (newMessage.includes('Indexes')) {
+                clearMessages()
+            }
+            addMessage(newMessage);
+        };
+
+        socket.onclose = function () {
+            console.log('WebSocket closed, attempting to reconnect in ' + RECONNECT_DELAY + 'ms');
+            setTimeout(connectWebSocket, RECONNECT_DELAY);
+        };
+
+        socket.onerror = function (error) {
+            console.error('WebSocket error: ', error);
+            socket.close();
+        };
+    }
+
+    function addMessage(message) {
+        const messageContainer = document.createElement('div');
+        messageContainer.classList.add('message-container');
+
+        const messageSpan = document.createElement('span');
+        messageSpan.classList.add('message');
+        messageSpan.innerHTML = message;
+
+        messageContainer.appendChild(messageSpan);
+        messagesContainer.appendChild(messageContainer);
+
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    function clearMessages() {
+        messagesContainer.innerHTML = '';
+    }
+
+    botButton.addEventListener('click', function () {
+        socket.send("allbot")
+    })
+
+    autoEnableBotButton.addEventListener('click', function () {
+        socket.send("autoenablebot")
+    })
+
+    connectWebSocket();
+</script>
+</body>
+</html>

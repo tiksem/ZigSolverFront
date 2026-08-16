@@ -1,0 +1,123 @@
+webSocket("/commands") {
+            val mode = call.request.queryParameters["mode"]?.toInt()?.let {
+                ConnectionMode.entries[it]
+            } ?: ConnectionMode.HAND
+
+            val tableIndex = call.request.queryParameters["tableIndex"]?.toIntOrNull() ?: 0
+
+            var allBotsEnabled = false
+
+            try {
+                webSocketConnectionManager.onClientConnected(this, mode = mode, tableIndex = tableIndex)
+                for (frame in incoming) {
+                    val text = (frame as? Frame.Text)?.readText() ?: continue
+
+                    if (text in listOf("read", "screenshot", "bot", "pause")) {
+                        if (tableIndex !in runners.map { it.tableIndex }) {
+                            webSocketConnectionManager.sendMessage(
+                                "Table with index $tableIndex is not running",
+                                tableIndex = tableIndex
+                            )
+                            continue
+                        }
+                    }
+
+                    when (text) {
+                        "read" -> {
+                            runners[tableIndex].readStats()
+                        }
+                        "screenshot" -> {
+                            Debug.stopScreenshot = !Debug.stopScreenshot
+                            val screenshotFile = File(
+                                File(config.screenshotPath).also {
+                                    it.mkdirs()
+                                },
+                                UUID.randomUUID().toString() + ".png"
+                            )
+                            ImageIO.write(
+                                Screenshots.captureScreenshot(screenIndex = 0),
+                                "png",
+                                screenshotFile
+                            )
+                        }
+                        "bot" -> {
+                            runners.find {
+                                it.tableIndex == tableIndex
+                            }?.toggleBot()
+                        }
+                        "pause" -> {
+                            runners.find {
+                                it.tableIndex == tableIndex
+                            }?.togglePause()
+                        }
+                        "allbot" -> {
+                            allBotsEnabled = !allBotsEnabled
+                            runners.forEach {
+                                it.setBotEnabled(!allBotsEnabled)
+                            }
+                            webSocketConnectionManager.sendMessage(
+                                if (allBotsEnabled) "All bots enabled" else "All bots disabled",
+                                tableIndex = INDEXES_TABLE_INDEX
+                            )
+                        }
+                        "autoenablebot" -> {
+                            (runner as? ScannerRunner)?.toggleAutoEnableBots()
+                        }
+                        "passive_fish", "calling_station", "aggro_fish", "fish", "rock", "tag", "lag", "rock_tag" -> {
+                            runners.find {
+                                it.tableIndex == tableIndex
+                            }?.setProfile(text)
+                        }
+                    }
+                }
+            } finally {
+                webSocketConnectionManager.onClientDisconnected(this)
+            }
+        }
+
+        post("/checkScreenshot") {
+            val multipart = call.receiveMultipart()
+            var screenshot: BufferedImage? = null
+            var cropCoords: IntArray? = null
+            var tableIndex = 0
+            var check2 = false
+            multipart.forEachPart { part ->
+                when (part) {
+                    is PartData.FileItem -> {
+                        screenshot = ImageIO.read(part.provider().toInputStream())
+                    }
+                    is PartData.FormItem -> {
+                        if (part.name == "crop" && part.value.isNotBlank()) {
+                            cropCoords = part.value.replaceAll(space, "").split(
+                                ","
+                            ).map { it.toInt() }.toIntArray()
+                        } else if (part.name == "check2") {
+                            if (part.value == "true") {
+                                check2 = true
+                            }
+                        } else if (part.name == "tableIndex") {
+                            tableIndex = part.value.toIntOrNull() ?: 0
+                        }
+                    }
+                    else -> {}
+                }
+            }
+
+            if (cropCoords == null) {
+                val img = screenshot ?: throw IllegalStateException("Screenshot is null")
+                if (check2) {
+//                    screenshotProcessor.onScreenshotReceived(img).also {
+//                        call.respond(it ?: throw IllegalStateException("Screenshot is null"))
+//                    }
+                } else {
+                    val extractor = getKoinInstance<Extractor>(config)
+                    extractor.debugScreenshot(img).also {
+                        call.respond(it)
+                    }
+                }
+            } else {
+                val cropped = screenshot?.crop(cropCoords!!)
+                    ?: throw IllegalStateException("Screenshot is null")
+                call.respondBufferedImage(cropped, "png")
+            }
+        }

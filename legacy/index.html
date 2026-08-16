@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Messages</title>
+    <style>
+        :root {
+            --bg: #0b0f14;
+            --panel: #111821;
+            --panel-2: #151e29;
+            --border: #263241;
+            --border-soft: #1b2633;
+            --text: #eef4fb;
+            --muted: #8ea0b5;
+            --accent: #5da9ff;
+            --accent-strong: #2f8cff;
+            --green: #4dd4a7;
+            --yellow: #f2c94c;
+            --red: #ff6b6b;
+            --shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            color: var(--text);
+            background:
+                    radial-gradient(circle at 10% 0%, rgba(47, 140, 255, 0.10), transparent 28rem),
+                    var(--bg);
+            font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .topbar {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            min-height: 64px;
+            padding: 12px 20px;
+            background: rgba(17, 24, 33, 0.88);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(14px);
+        }
+
+        .title-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        h3 {
+            margin: 0;
+            padding: 0;
+            color: var(--text);
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        #messages {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 18px;
+            scroll-behavior: smooth;
+        }
+
+        #messages:empty::before {
+            content: "Waiting for messages…";
+            display: grid;
+            place-items: center;
+            min-height: 100%;
+            color: #617287;
+            font-size: 14px;
+        }
+
+        .message-container {
+            display: flex;
+            align-items: center;
+            width: min(100%, 1100px);
+            margin: 0 auto 10px;
+            padding: 12px 14px;
+            background: linear-gradient(180deg, rgba(21, 30, 41, 0.96), rgba(17, 24, 33, 0.96));
+            border: 1px solid var(--border-soft);
+            border-radius: 10px;
+            box-shadow: 0 5px 16px rgba(0, 0, 0, 0.12);
+            transition:
+                    background-color 0.2s ease,
+                    border-color 0.2s ease,
+                    transform 0.2s ease;
+        }
+
+        .message-container:hover {
+            border-color: #33465c;
+        }
+
+        .message {
+            flex: 1 1 auto;
+            min-width: 0;
+            color: #dbe6f3;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 13px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .greyed-out {
+            opacity: 0.48;
+            background: #11161d;
+        }
+
+        .chatgpt {
+            color: var(--green);
+        }
+
+        .control-panel {
+            flex: 0 0 auto;
+            padding: 14px 18px 18px;
+            background: linear-gradient(180deg, rgba(11, 15, 20, 0), rgba(11, 15, 20, 0.98) 18%);
+        }
+
+        .control-shell {
+            width: min(100%, 1100px);
+            margin: 0 auto;
+            padding: 14px;
+            background: rgba(17, 24, 33, 0.96);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            box-shadow: var(--shadow);
+        }
+
+        .control-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 14px;
+            align-items: end;
+        }
+
+        .control-section {
+            min-width: 0;
+        }
+
+        .section-label {
+            margin: 0 0 8px 2px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.11em;
+            text-transform: uppercase;
+        }
+
+        #profileButtons {
+            display: grid;
+            grid-template-columns: repeat(8, minmax(88px, 1fr));
+            gap: 8px;
+        }
+
+        button {
+            appearance: none;
+            min-height: 42px;
+            padding: 0 14px;
+            border: 1px solid #314158;
+            border-radius: 8px;
+            color: #dce8f5;
+            background: #182331;
+            font: inherit;
+            font-size: 14px;
+            font-weight: 650;
+            cursor: pointer;
+            user-select: none;
+            transition:
+                    transform 0.12s ease,
+                    background-color 0.12s ease,
+                    border-color 0.12s ease,
+                    color 0.12s ease,
+                    box-shadow 0.12s ease;
+        }
+
+        button:hover {
+            color: #ffffff;
+            background: #203044;
+            border-color: #46617f;
+            box-shadow: 0 5px 14px rgba(0, 0, 0, 0.18);
+        }
+
+        button:active {
+            transform: translateY(1px);
+            box-shadow: none;
+        }
+
+        button:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        .profileButton {
+            min-width: 0;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+        }
+
+        .profileButton:hover {
+            color: #dff0ff;
+            background: #17375b;
+            border-color: var(--accent-strong);
+        }
+
+        .action-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, auto);
+            gap: 8px;
+        }
+
+        #readButton {
+            color: #dff0ff;
+            background: #17375b;
+            border-color: #275f99;
+        }
+
+        #botButton {
+            color: #ddfff4;
+            background: #17382f;
+            border-color: #28634f;
+        }
+
+        #pause {
+            color: #ffdcdc;
+            background: #3c2024;
+            border-color: #6f353b;
+        }
+
+        @media (max-width: 980px) {
+            #profileButtons {
+                grid-template-columns: repeat(4, minmax(100px, 1fr));
+            }
+
+            .control-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .action-buttons {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (max-width: 620px) {
+            .topbar {
+                padding: 10px 14px;
+            }
+
+            #messages {
+                padding: 12px;
+            }
+
+            .control-panel {
+                padding: 10px 12px 12px;
+            }
+
+            .control-shell {
+                padding: 12px;
+                border-radius: 12px;
+            }
+
+            #profileButtons {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .action-buttons {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            button {
+                min-height: 44px;
+                padding: 0 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <div class="title-wrap">
+        <h3>WebSocket Messages</h3>
+        <div class="subtitle">Live table feed and player profile controls</div>
+    </div>
+</header>
+
+<main id="messages"></main>
+
+<footer class="control-panel">
+    <div class="control-shell">
+        <div class="control-grid">
+            <section class="control-section">
+                <div class="section-label">Player profile</div>
+                <div id="profileButtons">
+                    <button class="profileButton" onclick="send('fish')">Fish</button>
+                    <button class="profileButton" onclick="send('aggro_fish')">Arg Fish</button>
+                    <button class="profileButton" onclick="send('passive_fish')">Pass Fish</button>
+                    <button class="profileButton" onclick="send('calling_station')">Phone</button>
+                    <button class="profileButton" onclick="send('rock')">Rock</button>
+                    <button class="profileButton" onclick="send('rock_tag')">Rock TAG</button>
+                    <button class="profileButton" onclick="send('tag')">TAG</button>
+                    <button class="profileButton" onclick="send('lag')">LAG</button>
+                </div>
+            </section>
+
+            <section class="control-section">
+                <div class="section-label">Actions</div>
+                <div class="action-buttons">
+                    <button id="readButton">Read</button>
+                    <button id="botButton">Bot</button>
+                    <button id="pause">Pause</button>
+                </div>
+            </section>
+        </div>
+    </div>
+</footer>
+
+<script>
+    const path = window.location.pathname;
+    const tableIndex = parseInt(path.split('/')[1]) || 0;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    let mode = urlParams.get('mode');
+    if (!mode) {
+        mode = 0
+    }
+
+    document.getElementsByTagName("h3")[0].innerText = "Table " + tableIndex
+
+
+    const RECONNECT_DELAY = 5000; // 5 seconds
+    const messagesContainer = document.getElementById('messages');
+    const readButton = document.getElementById('readButton');
+    const botButton = document.getElementById('botButton');
+    const pauseButton = document.getElementById('pause');
+
+    let socket;
+
+    function connectWebSocket() {
+        socket = new WebSocket('ws://' + window.location.host + "/commands?mode=" + mode + "&tableIndex=" + tableIndex);
+
+        socket.onopen = function () {
+            console.log('WebSocket connected');
+        };
+
+        socket.onmessage = function (event) {
+            const newMessage = event.data.replace(/\n/g, '<br>');
+            if (newMessage.includes('New hand') || newMessage.includes("Hood:")) {
+                clearMessages()
+            }
+            addMessage(newMessage);
+        };
+
+        socket.onclose = function () {
+            console.log('WebSocket closed, attempting to reconnect in ' + RECONNECT_DELAY + 'ms');
+            setTimeout(connectWebSocket, RECONNECT_DELAY);
+        };
+
+        socket.onerror = function (error) {
+            console.error('WebSocket error: ', error);
+            socket.close();
+        };
+    }
+
+    function send(profile) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(profile)
+        } else {
+            console.error('WebSocket is not connected')
+        }
+    }
+
+    function addMessage(message, isChatGpt) {
+        const messageContainer = document.createElement('div');
+        messageContainer.classList.add('message-container');
+
+        const messageSpan = document.createElement('span');
+        messageSpan.classList.add('message');
+        if (isChatGpt) {
+            messageSpan.classList.add("chatgpt")
+        }
+        messageSpan.innerHTML = message;
+
+        messageContainer.appendChild(messageSpan);
+        messagesContainer.appendChild(messageContainer);
+
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    function copyToClipboard(text) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+    }
+
+    function clearMessages() {
+        messagesContainer.innerHTML = '';
+    }
+
+    readButton.addEventListener('click', function () {
+        socket.send("read")
+    })
+
+    botButton.addEventListener('click', function () {
+        socket.send("bot")
+    })
+
+    pauseButton.addEventListener('click', function () {
+        socket.send('pause')
+    })
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'e' || event.key === 'E') {
+            readButton.click();
+        }
+    });
+
+    connectWebSocket();
+</script>
+</body>
+</html>
