@@ -22,7 +22,7 @@ const BOT_PORT = Number(process.argv[2] || 8080)
 const API_PORT = Number(process.argv[3] || 8000)
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const INDEXES_TABLE_INDEX = 96782
-const TABLES = [0, 3, 7, 9]
+const TABLES = [0, 1, 3, 7, 9]
 
 /** How long a fake solve takes, so an aborted one is visible in the log. */
 const SOLVE_MS = 2500
@@ -93,6 +93,96 @@ position=CO
 waiting
 hand=Q♠J♠
 stack=85.7BB
+`
+
+/**
+ * Table 1: a 6-max pot that is heads-up FROM the flop — the one shape the
+ * Exploit regime covers, so this is the table to point at when working on it
+ * (and on Manual, which only raises its question where the choice is real).
+ */
+const SNAPSHOT_HU_FLOP = `This is online poker tournament, 412 players left, 61.0BB average stack, 45 players paid. Total pot 12.4BB
+
+K Barsukov
+position=UTG
+fold
+VPIP=25%
+PFR=19%
+stack=147.8BB
+
+Dmitri O
+position=MP
+fold
+VPIP=31%
+PFR=24%
+stack=96.4BB
+
+*me*
+position=CO
+raise 2.3BB
+VPIP=24%
+PFR=20%
+3BET=9%
+ATS=42%
+hand=A♦J♦
+stack=60.0BB
+
+Nikolai V
+position=BTN
+fold
+VPIP=19%
+PFR=14%
+stack=54.0BB
+
+Sasha M
+position=SB
+fold
+VPIP=42%
+PFR=12%
+stack=61.7BB
+
+Big Stack Bob
+position=BB
+call
+VPIP=41%
+PFR=11%
+3BET=4%
+ATS=20%
+Flop Fold to C-BET=45%
+WTSD=38%
+AF=1.0
+statHands=1500
+stack=60.0BB
+
+Board: K♠ 8♦ 3♦
+
+Big Stack Bob
+position=BB
+check
+stack=57.7BB
+
+*me*
+position=CO
+bet 2.1BB
+hand=A♦J♦
+stack=55.6BB
+
+Big Stack Bob
+position=BB
+call
+stack=55.6BB
+
+Board: K♠ 8♦ 3♦ 7♣
+
+Big Stack Bob
+position=BB
+check
+stack=55.6BB
+
+*me*
+position=CO
+waiting
+hand=A♦J♦
+stack=55.6BB
 `
 
 /** Table 3: heads-up preflop — the chart path, which has no GTO twin. */
@@ -222,38 +312,104 @@ hand=A♠K♦
 stack=52.8BB
 `
 
+/**
+ * The heads-up flop ladder, cheapest budget last — the real balancer runs the
+ * strongest flow that fits `maxSolveTime`, so keying off the budget is what
+ * exercises every branch of the panel's flow copy from the settings sheet.
+ */
+const flowFor = (budget) => {
+  const s = Number(budget) || 0
+  if (s >= 15) return 'exact'
+  if (s >= 8) return 'exact-reduced'
+  if (s >= 4) return 'exact-clustered'
+  return 'net'
+}
+
+/**
+ * One answer per call, under the request's `regime`.
+ *
+ * GTO is a distribution to mix at; exploit is a ranking by EV whose top row is
+ * the move, so `probability` is 1 there and 0 everywhere else. The mock also
+ * models the fallback: exploit is heads-up postflop only, so a request for it
+ * on a spot this mock is pretending is preflop comes back as GTO with
+ * `regimeRequested` still saying what was asked.
+ */
+const GTO_ACTIONS = [
+  { action: 'fold', probability: 0.1904 },
+  { action: 'call(4.1BB)', probability: 0.5218 },
+  { action: 'raise 60%(14.2BB)', probability: 0.2451 },
+  { action: 'all-in(85.7BB)', probability: 0.0427 },
+]
+
+// Ranked by EV, best first — the calculator's own output order.
+const EXPLOIT_ACTIONS = [
+  { action: 'raise 60%(14.2BB)', probability: 1, evBB: 6.412, evPot: 0.298, support: 0.3502 },
+  { action: 'call(4.1BB)', probability: 0, evBB: 4.883, evPot: 0.227, support: 1.0 },
+  { action: 'fold', probability: 0, evBB: 0.0, evPot: 0.0, support: 1.0 },
+  { action: 'all-in(85.7BB)', probability: 0, evBB: -3.117, evPot: -0.145, support: 0.2525 },
+]
+
+/**
+ * The street the body actually ends on, from its last `Board:` line.
+ *
+ * The canned answers are fixed, but the street they claim must not be: a
+ * snapshot showing a turn and an answer labelled "flop" is a trap for whoever
+ * works on the panel next.
+ */
+const streetOf = (body) => {
+  const lines = String(body || '').match(/^\s*board\s*:?(.*)$/gim) || []
+  if (!lines.length) return 'preflop'
+  const cards = (lines[lines.length - 1].split(':')[1] || '').trim().split(/[\s,]+/).filter(Boolean)
+  return ['preflop', 'preflop', 'preflop', 'flop', 'turn', 'river'][cards.length] || 'flop'
+}
+
 const answerFor = (req) => {
-  const profile = req.autoProfile === false ? null : req.profile || 'population'
-  // The exploit moves further from GTO the harder the read; enough variation
-  // that re-solving under a different profile visibly changes the answer.
-  const tilt =
-    { station: 0.34, limper: 0.3, maniac: 0.26, nit: -0.2, spewer: 0.22, trapper: -0.14 }[
-      profile
-    ] ?? (profile ? 0.12 : 0)
-  const gto = [
-    { action: 'fold', probability: 0.1904 },
-    { action: 'call(4.1BB)', probability: 0.5218 },
-    { action: 'raise 60%(14.2BB)', probability: 0.2451 },
-    { action: 'all-in(85.7BB)', probability: 0.0427 },
-  ]
-  const shifted = [
-    { action: 'fold', probability: Math.max(0, 0.1904 - tilt * 0.55) },
-    { action: 'call(4.1BB)', probability: 0.5218 + tilt * 0.1 },
-    { action: 'raise 60%(14.2BB)', probability: 0.2451 + tilt * 0.35 },
-    { action: 'all-in(85.7BB)', probability: Math.max(0, 0.0427 + tilt * 0.1) },
-  ]
-  const total = shifted.reduce((s, a) => s + a.probability, 0)
+  const asked = req.regime === 'exploit' ? 'exploit' : 'gto'
+  const flow = flowFor(req.maxSolveTime)
+  const street = streetOf(req.body)
+  if (asked === 'exploit') {
+    return {
+      actions: EXPLOIT_ACTIONS,
+      regime: 'exploit',
+      regimeRequested: 'exploit',
+      solver: 'exploit',
+      street,
+      hand: 'QsJs',
+      responseTime: +(SOLVE_MS / 1000).toFixed(3),
+      meta: {
+        flow: 'expectimax',
+        board: '4h Td 8c',
+        seats: { ip: "'*me*' (CO)", oop: "'Dmitri O' (LJ)" },
+        potBB: 21.5,
+        solveSeconds: SOLVE_MS / 1000,
+        chance: { t: 'bucket', r: 'bucket' },
+        leaf: 'model',
+        removal: 'root',
+        menuBets: [33, 50, 75],
+        menuRaises: [75, 150],
+        nodes: 8270,
+        predicts: 16,
+        villainStats: ['vpip', 'pfr', 'three_bet', 'cbet_f'],
+        villainStatHands: 1500,
+        warnings: [
+          'raise sizes come from the measured population raise-TO distribution — no ' +
+            'raise-size model exists',
+          "villain's raise mass is scored as a call at the raise cap (max_raises=1)",
+        ],
+      },
+    }
+  }
   return {
-    actions: shifted.map((a) => ({ ...a, probability: +(a.probability / total).toFixed(4) })),
-    gtoActions: gto,
-    profile,
-    solver: 'exact',
-    street: 'flop',
+    actions: GTO_ACTIONS,
+    regime: 'gto',
+    regimeRequested: asked,
+    solver: flow === 'net' ? 'net' : 'exact',
+    street,
     hand: 'QsJs',
     responseTime: +(SOLVE_MS / 1000).toFixed(3),
     meta: {
-      flow: 'exact',
-      cached: profile ? 'blueprint' : null,
+      flow,
+      cached: null,
       board: '4h Td 8c',
       actingSeat: 'ip',
       seats: { ip: "'*me*' (CO)", oop: "'Dmitri O' (LJ)" },
@@ -267,12 +423,7 @@ const answerFor = (req) => {
         'raise 60%(14.2BB)': 'semi_bluff',
         'all-in(85.7BB)': 'bluff_raise',
       },
-      warnings: profile
-        ? [
-            "villain 'Dmitri O' read fitted from 4 HUD stats over an unknown sample; " +
-              '3BET converted from the GG Smart HUD definition (11.0 -> 8.4)',
-          ]
-        : [],
+      warnings: [],
     },
   }
 }
@@ -283,8 +434,8 @@ const ANSWER_CHART = {
     { action: 'call', probability: 0.1832 },
     { action: 'raise 11.4BB', probability: 0.8168 },
   ],
-  gtoActions: null,
-  profile: null,
+  regime: 'gto',
+  regimeRequested: 'gto',
   solver: 'chart',
   street: 'preflop',
   hand: 'AsKd',
@@ -410,7 +561,15 @@ bot.on('upgrade', (req, socket) => {
   console.log(`[bot] client on mode=${mode} tableIndex=${tableIndex}`)
 
   const snapshotFor = (i) =>
-    i === 0 ? SNAPSHOT : i === 3 ? SNAPSHOT_HU : i === 9 ? SNAPSHOT_9MAX : SNAPSHOT_BAD
+    i === 0
+      ? SNAPSHOT
+      : i === 1
+        ? SNAPSHOT_HU_FLOP
+        : i === 3
+          ? SNAPSHOT_HU
+          : i === 9
+            ? SNAPSHOT_9MAX
+            : SNAPSHOT_BAD
 
   if (tableIndex === INDEXES_TABLE_INDEX) {
     send(`Indexes: ${TABLES.join(',')}`)
@@ -483,6 +642,9 @@ const apiServer = http.createServer((req, res) => {
         netEnabled: true,
         netDevice: 'mps',
         flopSolveDevice: 'cpu (mock)',
+        // Which /move regimes this build can serve. A box whose behavioural
+        // models are missing reports ["gto"] only.
+        moveRegimes: ['gto', 'exploit'],
       }),
     )
   }
@@ -498,8 +660,8 @@ const apiServer = http.createServer((req, res) => {
         /* fall through to the 400 below */
       }
       const id = ++solveNo
-      const label = `#${id} handId=${body.handId || '-'} profile=${
-        body.autoProfile === false ? 'GTO' : body.profile || 'auto'
+      const label = `#${id} handId=${body.handId || '-'} regime=${
+        body.regime || 'gto'
       } budget=${body.maxSolveTime || '-'}s`
       console.log(`[api] -> solve ${label}`)
 

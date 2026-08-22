@@ -99,24 +99,26 @@ Bot (auto): call 4.1BB
 ## Which spots are worth generating
 
 The endpoint answers a 3-way flop, but it answers it *differently*: the flow is
-`mccfr`, the regime `flop-checkdown` or similar, and the response says so —
-`multiway pots are answered GTO: opponent reads shape the entry ranges but not
-the returned frequencies`. No value net, no exploit pass, and a read changes
-nothing you can see.
+`mccfr`, the regime `flop-checkdown` or similar, and `regime: "exploit"` comes
+back as `"gto"` with the reason in the warnings — the behavioural models are
+heads-up postflop and a multiway pot is not a spot they were fitted on. No value
+net, no exploit answer.
 
 **Heads-up is where the solver does its real work.** Measured on this host's own
 snapshots, against the real API on this box (no CUDA flop solver):
 
-| spot | flow | time | does a read move it? |
+| spot | GTO flow | GTO time | `regime: "exploit"` |
 |---|---|---|---|
-| 3-way flop | `mccfr` | ~2s | no — multiway is answered GTO |
-| heads-up flop | `net` | ~17s | no — `net` keeps no solver session, so the profile answer comes back unavailable and you get GTO. A 120s budget did not change that here |
-| heads-up turn / river | `exact` | ~35–70s | **yes** — `station` on one turn spot took check from 73.2% (GTO) to 99.8% |
+| 3-way flop | `mccfr` | ~2s | falls back to GTO — multiway is not what the models cover |
+| heads-up flop | `net` | ~17s | **yes**, ~6s — the calculator does not use the solver at all |
+| heads-up turn / river | `exact` | ~35–70s | **yes**, ~1.3s turn / ~0.1s river |
 
-So table **3** (2 seats) is the one to point at when you want to watch solving,
-and a turn or river there is the one to point at when you want to watch a read
-change the answer. The 6-, 8- and 9-seat tables are for the felt, the HUD stats
-and the message dock.
+Note the exploit regime does not get faster or slower with `maxSolveTime`: it
+has no regime ladder to degrade down, so the budget is reported against, not
+enforced. And it is not available on table **3** — that host deals two seats,
+and every flopml training builder drops hands with fewer than three players
+dealt in, so a two-handed table is off-distribution in the one feature that says
+so. Point at a 6-seat table that got heads-up on the flop.
 
 ## Solving one by hand
 
@@ -133,16 +135,15 @@ and `♠♥♦♣` do not have to be escaped by hand:
 curl -s -X POST http://localhost:8000/move -H 'Content-Type: application/json' -d "$(python3 -c 'import json,sys; print(json.dumps({"body": sys.stdin.read(), "maxSolveTime": 15, "statHands": 500}))' < /tmp/body.txt)"
 ```
 
-Add `"autoProfile": false` for no read at all, or `"profile": "station"` to ask
-under a read — which only shows on a spot that solves `exact`, per the table
-above.
+Add `"regime": "exploit"` to ask the behavioural calculator instead of the
+solver — heads-up postflop only, per the table above; anywhere else it answers
+GTO and says why in `meta.warnings`.
 
 ## Commands it takes
 
 `read` re-sends the pending snapshot · `pause` freezes the clock · `bot` stops
 the hero from acting on its own · `allbot` / `autoenablebot` are acknowledged ·
-anything else is treated as a profile token and acknowledged, the way the runner
-acknowledges a read.
+anything else is acknowledged the way the runner acknowledges a read.
 
 ## Two shapes worth expecting
 

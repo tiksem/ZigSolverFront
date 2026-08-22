@@ -1,16 +1,23 @@
 /**
  * Normalizes a /move answer into what the panel renders.
  *
- *   { actions:    [{action, probability}],   <- the SERVED answer: the exploit
- *                                               when a profile resolved
- *     gtoActions: [{action, probability}],   <- what it deviated FROM (null preflop)
- *     solver, profile, street, hand, responseTime,
+ *   { actions: [{action, probability, evBB?, evPot?, support?}],
+ *     regime, regimeRequested, solver, street, hand, responseTime,
  *     meta: { flow, cached, board, actingSeat, seats, potBB, toCallBB,
- *             solveSeconds, gtoStrategy, handDecisions, warnings, ... } }
+ *             solveSeconds, handDecisions, warnings, ... } }
+ *
+ * ONE list, because the endpoint answers one question per call. A GTO answer is
+ * a distribution to mix at; an exploit answer is an argmax, so `probability` is
+ * 1 on one row and 0 on the rest and the EV columns are what actually decided
+ * it. `regime` is what ran and `regimeRequested` what was asked for — they
+ * differ whenever the exploit regime declined the spot.
  *
  * Action keys are `check`, `fold`, `call(NN.NBB)`, `bet 33%(4.4BB)`,
- * `raise 60%(27.5BB)`, `all-in(37.8BB)` postflop, and `raise 8.4BB` style
- * preflop / multiway.
+ * `raise 60%(27.5BB)`, `all-in(37.8BB)` for heads-up AND multiway postflop
+ * (multiway sizes as percent of pot too, replaying the street's chip flow
+ * server-side since the engine has no live pot field of its own). Preflop
+ * still carries the BB-only `raise 8.4BB` style, since ranges there aren't
+ * anchored to a pot.
  */
 
 const KIND_ORDER = { fold: 0, check: 1, call: 2, bet: 3, raise: 4, 'all-in': 5 }
@@ -55,6 +62,12 @@ function toList(actions) {
     .map((a) => ({
       action: a.action,
       probability: Number(a.probability) || 0,
+      // Exploit rows only. `?? null` rather than `|| null`: an EV of exactly 0
+      // is the fold branch, which is the reference every other number is read
+      // against and the last one to drop.
+      evBB: a.evBB ?? null,
+      evPot: a.evPot ?? null,
+      support: a.support ?? null,
       ...splitAction(a.action),
     }))
 }
@@ -85,22 +98,18 @@ let nextId = 1
 /**
  * A /move response body -> a render-ready answer.
  *
- * `request` is what we asked for, so the panel can say which read produced this
- * answer even when the endpoint echoes a resolved object rather than a name.
+ * `request` is what we asked for, so the panel can say what was requested even
+ * when the endpoint answered a different regime.
  */
 export function buildAnswer(payload, request = {}) {
-  const actions = sortForDisplay(toList(payload.actions))
-  const gtoRaw = payload.gtoActions == null ? null : sortForDisplay(toList(payload.gtoActions))
+  const isExploit = payload.regime === 'exploit'
+  const raw = toList(payload.actions)
+  // An exploit answer is ranked by EV and the ordering IS the recommendation,
+  // so it is left alone. A GTO distribution has no order of its own and reads
+  // best grouped fold/check/call/bet/raise.
+  const actions = isExploit ? raw : sortForDisplay(raw)
   const meta = payload.meta || {}
-  // `actions` IS the GTO answer when no profile was served; only call the two
-  // different when a profile actually resolved.
-  const hasProfile = payload.profile != null && gtoRaw != null
-  const deviated =
-    hasProfile &&
-    gtoRaw.some((g) => {
-      const a = actions.find((x) => x.action === g.action)
-      return !a || Math.abs(a.probability - g.probability) > 0.0005
-    })
+  const requested = payload.regimeRequested || payload.regime || 'gto'
   return {
     id: nextId++,
     receivedAt: Date.now(),
@@ -110,14 +119,17 @@ export function buildAnswer(payload, request = {}) {
     street: payload.street,
     hand: payload.hand,
     solver: payload.solver,
-    profile: payload.profile,
+    regime: payload.regime || 'gto',
+    regimeRequested: requested,
+    // The endpoint declined the question and answered the other one. Not an
+    // error — the table still needs an action — but the panel must not let it
+    // pass for what was asked.
+    fellBack: requested !== (payload.regime || 'gto'),
     responseTime: payload.responseTime,
-    exploit: actions,
-    gto: gtoRaw,
-    hasProfile,
-    deviated,
-    sampledExploit: sampleAction(actions),
-    sampledGto: gtoRaw ? sampleAction(gtoRaw) : null,
+    actions,
+    // An argmax has nothing to sample: the top row IS the move. A distribution
+    // does, and the draw is the point of showing one.
+    sampled: isExploit ? actions[0] || null : sampleAction(actions),
     meta,
     warnings: meta.warnings || [],
   }

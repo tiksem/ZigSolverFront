@@ -23,8 +23,8 @@ The app talks to both ends itself:
 | **ZigSolver API** | the solver. Every snapshot is POSTed to `/move`, and the answer is what you read. |
 
 Both are typed once on the root view and remembered. There is **no `mode=1`
-socket** — the front end is the one calling the solver, which is what makes the
-read buttons able to re-ask the same question a different way.
+socket** — the front end is the one calling the solver, which is what lets the
+regime picker re-ask the same spot as a different question.
 
 The API must send CORS headers for a browser to accept its responses; the
 bundled `api/server.py` change does that (`--cors-origin` to pin it). The
@@ -62,37 +62,56 @@ whether you left it open.
 `check.html` sent (image, `check2`, `crop`, `tableIndex`), except you can drop or
 paste the image and the response renders inline.
 
-## Reads, and re-asking
+## The regime, and re-asking
 
-The read buttons are ZigSolver's own opponent profiles —
-[profiles.js](src/lib/profiles.js) is generated from its `profiles.json`, the
-same list `api/constants.PROFILE_INTENSITY` is built from, so every one is a
-name `/move` accepts:
+One picker on the table screen decides **which question** goes out with each
+snapshot. It is not in the settings sheet on purpose: everything in there is
+*how* a solve is requested and you set it once, while this is *what you are
+asking for*, and it changes hand to hand.
 
-> population · reg · tag · lag · aggro_reg · tight_reg · passive_reg ·
-> weak_tight · sticky_reg · spewer · trapper · station · limper · maniac · nit
+| | sent as | what comes back |
+|---|---|---|
+| **GTO** | `regime: "gto"` | The equilibrium strategy at the node — a distribution, mix at those frequencies. |
+| **Exploit** | `regime: "exploit"` | The maximum-EV action against this villain's measured behaviour. An expectimax over models fitted to real players, so there is no equilibrium in it and nothing to mix: one action, with the EV of every alternative next to it. |
+| **Manual** | neither | Nothing is sent until you pick. Each decision the table pushes stops and asks, and that choice applies to that decision only. |
 
-plus two that are not profiles: **Auto** (the endpoint fits a read from the
-villain's own HUD stats) and **GTO** (`autoProfile: false`, no read at all).
-Each has a **?** with what the cluster is, how it differs from the pool, its
-signature, and the temperature the exploit pass regularizes with.
+**The two are never computed together.** An exploit answer is a different
+question from an equilibrium one rather than a deviation from it, so there is no
+GTO column beside it and no delta — pricing both would double the wall clock of
+every decision to illustrate a comparison you did not ask for. Switch the
+picker to see the other one.
 
-Picking one **re-solves the snapshot on screen** under that read, and — for a
-real profile name — also sends the token to the runner, so the bot's own play
-follows the read you are looking at. Because the call carries a `handId`, the
-endpoint answers off the tree it already solved (one best-response pass, ~0.2s)
-instead of solving the spot again.
+**Exploit is heads-up postflop only.** Preflop, a flop dealt three or more ways,
+and a two-handed table are outside what the models were fitted on
+(`api/exploit_spot.py` is the list, and this app mirrors it in
+[regime.js](src/lib/regime.js)). Those answer GTO instead: the picker greys the
+Exploit chip and says why, Manual skips the question rather than asking one with
+a single answer, and if it happens anyway the answer panel says
+*“Exploit was asked for and could not be answered here”* with the reason in the
+warnings. There is no ICM in it either — a bubble spot gets a cash-game answer.
+
+Picking a regime **re-solves the snapshot on screen**. A `handId` still rides
+along so a later street reuses the tree the earlier one built, but that is a GTO
+thing only: an exploit answer walks the hand rather than a subgame, so it is
+recomputed every call by design.
 
 The answer panel is deliberately small — a strip, not a page:
 
-* **Play** and **GTO**, the two randomly sampled actions, side by side.
-* One row per action with **GTO %, Exploit % and the delta** — numbers, no bars.
-  The decision category the engine gave the hero's hand rides along each row.
-* **One line on the read** ("passive and does not fold: AF 1.30, folds a river
-  bet 51.9% …") with a **?** for the full cluster description and signature.
-* The solver regime as a badge with a **?** for what that rung does to the
-  answer, and a **Details** button holding the rest: every `meta` field, the
-  warnings and the raw response.
+* **Play**, the action to take — one random draw from the distribution under
+  GTO, and simply the top row under Exploit.
+* One row per action. Under GTO that is the **frequency**; under Exploit it is
+  **EV in BB**, the same as **% of pot**, and the **support** the size models
+  have at that size. The decision category the engine gave the hero's hand rides
+  along each row where the solve provides one.
+* The regime that actually ran as a chip, the solver regime as a badge with a
+  **?** for what that rung does to the answer, and a **Details** button holding
+  the rest: every `meta` field, the warnings and the raw response.
+
+**EV is counted from this decision on.** Chips already in the pot are sunk, so
+folding is `0` by construction and every other number is read against it.
+**Support** is the share of real play the size models saw at that size; a
+winning branch under ~2% is one the models are extrapolating on, and the panel
+flags it.
 
 ## Cancelling superseded solves
 
@@ -126,7 +145,7 @@ does at the endpoint:
 | Cancel superseded solves | whether to `POST /cancel` on supersede |
 | Per-hand tree cache | `handId` — reuse the solved tree across streets and reads |
 | Stat sample size | `statHands` — how much history the HUD stats cover |
-| Hold the sampled action | keep one draw while comparing reads |
+| Hold the sampled action | keep one draw while the same spot is re-solved (GTO only) |
 
 Endpoints are editable here too.
 
@@ -139,12 +158,14 @@ node mock/server.js 8080 8000
 ```
 
 Dependency-free (the WebSocket handshake and framing are done by hand). It
-serves `Indexes: 0,3,7,9`; table **0** is a 6-max flop decision, table **3** a
-heads-up preflop chart answer, table **7** a body the endpoint refuses, table
-**9** a full 9-max ring. The fake
+serves `Indexes: 0,1,3,7,9`; table **0** is a 3-way 6-max flop decision, table
+**1** a 6-max pot that is heads-up from the flop (the one shape the Exploit
+regime covers, so it is the table to point at for that and for Manual), table
+**3** a heads-up preflop chart answer, table **7** a body the endpoint refuses,
+table **9** a full 9-max ring. The fake
 `/move` takes 2.5s so cancellation is observable, implements `/cancel` and
-supersede-on-reuse like the real one, and shifts its exploit per profile so a
-re-solve visibly changes the answer.
+supersede-on-reuse like the real one, and answers both regimes — the exploit one
+with EVs and support, so the panel's second column set is exercised.
 
 Those four snapshots never move, and the answers are canned. To point the app at
 the **real solver** and still not need a poker client, there is
@@ -170,13 +191,14 @@ src/
               zigsolver.js  /move + /cancel client, handId minting
               moveResult.js answer normalizer + action sampling
               settings.js   persisted solve settings
+              regime.js     gto|exploit|manual, and where exploit applies
               notify.js     transient notifications
-              profiles.js   generated from ZigSolver/profiles.json
               solvers.js    what each solver regime means
               server.js     the two hosts; socket and http URLs
               useSocket.js  reconnecting WebSocket composable
-  components/ PokerTable · SeatPod · PlayingCard · ProfileBar · SolverPanel
-              HandDetails · SettingsSheet · InfoSheet · HelpButton
+  components/ PokerTable · SeatPod · PlayingCard · SolverPanel
+              RegimeBar · RegimePrompt · HandDetails · SettingsSheet
+              InfoSheet · HelpButton
               MessageDock · NotificationStack · AppNav · StatusDot
   views/      ConnectView · TableView · CheckView
 mock/         the two hosts as fixed snapshots

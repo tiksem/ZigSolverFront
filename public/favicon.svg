@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="ZigSolver">
+  <defs>
+    <linearGradient id="felt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#269362"/>
+      <stop offset="1" stop-color="#0f4f36"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#felt)"/>
+  <rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="none" stroke="#ffffff" stroke-opacity="0.18"/>
+  <path d="M9 8.2h14v4.3l-7.6 7h7.6v4.3H9v-4.3l7.6-7H9z" fill="#ffffff"/>
+</svg>

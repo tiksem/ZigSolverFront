@@ -26,7 +26,28 @@ export const SOLVERS = {
     detail:
       'The strongest 2-player path: a real tree solved to a 1%-of-pot early-stop target ' +
       'within the request budget. The hero’s combo is injected into the flop entry range ' +
-      'when the estimate does not contain it, so the answer is about the hand actually held.',
+      'when the estimate does not contain it, so the answer is about the hand actually held. ' +
+      'A flop this badge covers may still have been solved on a cheaper abstraction of the ' +
+      'same exact engine — trimmed bet menus, or clustered turn runouts — when the full one ' +
+      'did not fit; the Flow line below says which.',
+  },
+  exploit: {
+    title: 'Behavioural expectimax',
+    tone: 'ok',
+    quality: 'exploit',
+    summary: 'Not a solve: maximum EV against models fitted to real players.',
+    detail:
+      'Against a FIXED opponent model there is no equilibrium to compute, so this is an ' +
+      'expectimax rather than CFR — villain’s fold/call/raise probabilities and bet sizes come ' +
+      'from boosters trained on millions of real hands with these HUD stats, the showdown ' +
+      'model supplies E[share], and the hero maximizes. Villain’s range is never enumerated; ' +
+      'it is absorbed into the models’ weights, learned from the betting line. Nothing is ' +
+      'cached: the tree it walks is this hand, so every call rebuilds it.\n\n' +
+      'Three honest limits. Only BET sizes were trained, so the hero’s raise branches come ' +
+      'from the measured population raise-TO distribution rather than a model. The raise chain ' +
+      'is capped at one raise, so facing a raise the menu is call-or-fold — a re-raise was ' +
+      'never priced rather than priced and rejected, and the warnings say so. And there is no ' +
+      'ICM in it at all: a bubble spot gets a cash-game answer.',
   },
   net: {
     title: 'Net-truncated flop',
@@ -82,6 +103,33 @@ export const SOLVERS = {
       'The flop decision is still solved properly, but later-street play is abstracted to ' +
       'check or all-in, which biases the flop frequencies toward that shape.',
   },
+  'flop-shove-turn-river-cap1': {
+    title: 'MCCFR blueprint — shove/fold later streets, one raise',
+    tone: 'ok',
+    quality: 'mccfr',
+    summary:
+      'Same as the rung above, with the flop capped at a single raise per street.',
+    detail:
+      'On real 3-way ranges the uncapped rung prices at 20–31s, so a 15s request used to ' +
+      'fall all the way to the checkdown leaf. Cutting the flop raise chain to one raise ' +
+      '(bet, raise, then fold or call — no re-raise and no shove over it) is 45% fewer ' +
+      'infosets and fits any stack depth. Measured against a converged full-menu ' +
+      'reference it is indistinguishable from the uncapped rung: the boundary that ' +
+      'matters is betting versus no betting, not how deep the raise chain goes.',
+  },
+  'flop-shove-turn-cap1': {
+    title: 'MCCFR blueprint — shove/fold turn, one raise',
+    tone: 'ok',
+    quality: 'mccfr',
+    summary:
+      'The flop keeps its menu, the turn is check/all-in, the river is checked down.',
+    detail:
+      'The cheapest rung that still keeps a real decision on every street it models — ' +
+      'about 7s at any stack depth. The river carries no betting, which costs roughly ' +
+      '0.01–0.02 total variation against a full-menu reference, but the flop still plays ' +
+      'for a genuine turn decision. Well clear of the checkdown leaf below it, which has ' +
+      'twice the error on the hero’s own seat.',
+  },
   'flop-checkdown': {
     title: 'MCCFR blueprint — checkdown leaf',
     tone: 'weak',
@@ -90,7 +138,8 @@ export const SOLVERS = {
     detail:
       'The cheapest rung. Everything past the flop is checked down, so the answer knows ' +
       'nothing about future streets — treat the frequencies as a rough guide and raise ' +
-      'maxSolveTime if you can.',
+      'maxSolveTime if you can. Measured error on the hero’s seat is about twice any rung ' +
+      'that keeps postflop betting, so this one is worth spending budget to escape.',
   },
   'turn-unabstracted': {
     title: 'MCCFR turn — no card abstraction',
@@ -194,12 +243,45 @@ export function describeSolver(name) {
   }
 }
 
-/** `meta.flow` from /solve — how the 2-player street was actually solved. */
+/**
+ * `meta.flow` from /solve — how the 2-player street was actually solved. Listed
+ * in the balancer's own preference order: it runs the strongest flow that fits
+ * maxSolveTime, and the three exact rungs are all real CFR solves — what changes
+ * is how much of the game they abstract away before solving it.
+ */
 export const FLOWS = {
   exact: 'Exact CFR over the full betting menu.',
   'exact-reduced': 'Exact CFR over a reduced bet menu (the balancer trimmed sizes to fit).',
+  'exact-clustered':
+    'Reduced menus plus turn-runout clustering: the flop→turn chance node solves two ' +
+    'representatives per cluster instead of all ~49 runouts, so the turn and river subtrees ' +
+    'under the rest disappear. 2–5× faster for 0.2–1.6% deployment exploitability depending ' +
+    'on the group count, which is well inside the bar that makes a full solve preferable to ' +
+    'the net — so every rung of it is spent before the net is.',
   net: 'Flop truncated at the turn, leaves valued by the neural net.',
   mccfr: 'Sampling MCCFR blueprint (3+ players).',
+  expectimax:
+    'Expectimax over the trained behavioural models — hero maximizes, villain’s nodes are ' +
+    'expectations under the fitted action and size distributions, chance nodes average over ' +
+    'runouts (enumerated on the river, bucketed from a flop root).',
+}
+
+/**
+ * One line on how the street was solved, for any `meta.flow` — including a
+ * regime this build has never heard of. The balancer gains rungs faster than
+ * this app ships, and a flow with no local copy is exactly the case where the
+ * name alone is not enough to read the frequencies.
+ */
+export function describeFlow(name) {
+  if (!name) return null
+  if (FLOWS[name]) return FLOWS[name]
+  if (name.startsWith('exact')) {
+    return (
+      'An exact CFR solve on a regime this build has no description for — the balancer ' +
+      'picked it to fit the budget, so expect some abstraction against the full menu.'
+    )
+  }
+  return 'Solve regime reported by the API; no local description for this flow name.'
 }
 
 /** The decision category the engine assigned the hero hand for each action. */

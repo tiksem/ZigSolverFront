@@ -1,31 +1,45 @@
 <script setup>
 /**
- * The answer, compactly: what to play, the two strategies as numbers, and one
- * line on the read. Everything else — the solve's own account of itself, the
- * warnings, the raw payload — is a click away rather than on screen.
+ * The answer, compactly: what to play, the numbers behind it, and one line on
+ * the regime that produced it. Everything else — the solve's own account of
+ * itself, the warnings, the raw payload — is a click away rather than on screen.
+ *
+ * ONE column, because the endpoint answers one question per call. Which one it
+ * answered decides what the numbers mean: a GTO answer is a distribution to mix
+ * at, an exploit answer is a ranking by EV whose top row IS the move.
  */
 import { ref, computed } from 'vue'
 import PlayingCard from './PlayingCard.vue'
 import HelpButton from './HelpButton.vue'
 import InfoSheet from './InfoSheet.vue'
-import { describeSolver, FLOWS, DECISION_LABELS } from '../lib/solvers'
-import { profileTitle, profileBlurb, PROFILE_BY_NAME, SIGNATURE_FIELDS } from '../lib/profiles'
+import { describeSolver, describeFlow, DECISION_LABELS } from '../lib/solvers'
+import { REGIME_BY_VALUE } from '../lib/regime'
 import { ACTION_TONE, pct } from '../lib/moveResult'
 
 const props = defineProps({
   result: { type: Object, default: null },
   pending: { type: Boolean, default: false },
-  /** The read currently selected: 'auto' | 'gto' | a profile name. */
-  read: { type: String, default: 'auto' },
+  /** The regime currently selected: 'gto' | 'exploit' | 'manual'. */
+  regime: { type: String, default: 'gto' },
 })
 
 const solverHelp = ref(false)
-const readHelp = ref(false)
 const details = ref(false)
 
 const solver = computed(() => describeSolver(props.result?.solver))
 const meta = computed(() => props.result?.meta || {})
 const answer = computed(() => (props.result?.type === 'answer' ? props.result : null))
+
+/** The regime that ACTUALLY ran, which is what the numbers below mean. */
+const served = computed(() => REGIME_BY_VALUE[answer.value?.regime || 'gto'])
+const isExploit = computed(() => answer.value?.regime === 'exploit')
+
+/**
+ * The endpoint declined the question and answered the other one — preflop, a
+ * multiway pot, a two-handed table, or a box without the models. The reason is
+ * in the warnings; this is the sentence that sends you there.
+ */
+const fellBack = computed(() => !!answer.value?.fellBack)
 
 const heroCards = computed(() => {
   const h = props.result?.hand
@@ -33,65 +47,41 @@ const heroCards = computed(() => {
   return [h.slice(0, 2), h.slice(2, 4)]
 })
 
-const resolvedName = computed(() =>
-  typeof props.result?.profile === 'string' ? props.result.profile : null,
-)
-const profileLabel = computed(() => {
-  const p = props.result?.profile
-  if (!p) return null
-  return typeof p === 'object' ? 'Custom read' : profileTitle(p)
-})
-const blurb = computed(() => (resolvedName.value ? profileBlurb(resolvedName.value) : null))
-const readProfile = computed(() => PROFILE_BY_NAME[resolvedName.value] || null)
-
-/** What we asked for, when it differs from what came back. */
+/** What was asked for, in the picker's own words. */
 const askedLabel = computed(() => {
-  const asked = props.result?.request?.readLabel || props.read
-  if (asked === 'gto') return 'GTO only'
-  if (asked === 'auto') return 'Auto'
-  return profileTitle(asked)
-})
-const resolvedNote = computed(() => {
-  const asked = props.result?.request?.readLabel || props.read
-  if (asked === 'auto') return profileLabel.value ? `→ ${profileLabel.value}` : null
-  if (asked !== 'gto' && resolvedName.value && resolvedName.value !== asked) {
-    return `→ ${profileLabel.value}`
-  }
-  return null
+  const asked = answer.value?.regimeRequested || props.result?.request?.regime || props.regime
+  return REGIME_BY_VALUE[asked]?.title || asked
 })
 
-/** One row per action, both columns side by side. */
+/** One row per action. The columns differ by regime; the shape does not. */
 const rows = computed(() => {
   const a = answer.value
   if (!a) return []
-  const gto = a.gto || a.exploit
-  const source = a.hasProfile ? a.exploit : gto
-  return source.map((x) => {
-    const g = gto.find((y) => y.action === x.action)
-    const gp = g ? g.probability : null
-    const delta = a.hasProfile && gp != null ? x.probability - gp : null
-    return {
-      action: x.action,
-      color: ACTION_TONE[x.kind] || ACTION_TONE.other,
-      gto: gp,
-      exploit: x.probability,
-      delta: delta != null && Math.abs(delta) >= 0.005 ? delta : null,
-      decision: meta.value.handDecisions?.[x.action] || null,
-    }
-  })
+  return a.actions.map((x) => ({
+    action: x.action,
+    color: ACTION_TONE[x.kind] || ACTION_TONE.other,
+    probability: x.probability,
+    evBB: x.evBB,
+    evPot: x.evPot,
+    support: x.support,
+    decision: meta.value.handDecisions?.[x.action] || null,
+  }))
 })
 
-const twoColumn = computed(() => !!answer.value?.hasProfile && !!answer.value?.gto)
+/**
+ * The EV given up by NOT taking the best action, per row — the number that says
+ * whether the recommendation is a real edge or an indifference point.
+ */
+const bestEv = computed(() => {
+  const evs = rows.value.map((r) => r.evBB).filter((v) => v != null)
+  return evs.length ? Math.max(...evs) : null
+})
 
-const signature = computed(() => {
-  const p = readProfile.value
-  if (!p?.stats) return []
-  return SIGNATURE_FIELDS.filter(([k]) => p.stats[k] != null).map(([k, label, unit]) => ({
-    key: k,
-    label,
-    value: p.stats[k],
-    unit,
-  }))
+/** Below this the size models are extrapolating (flopml.exploit.Guard). */
+const THIN_SUPPORT = 0.02
+const thinBest = computed(() => {
+  const top = rows.value[0]
+  return isExploit.value && top && top.support != null && top.support < THIN_SUPPORT
 })
 
 const num = (v, d = 2) =>
@@ -113,6 +103,8 @@ const facts = computed(() => {
   const push = (label, value) => {
     if (value !== null && value !== undefined && value !== '') out.push({ label, value })
   }
+  push('Regime', props.result?.regime)
+  push('Requested', answer.value?.regimeRequested)
   push('Solver', props.result?.solver)
   push('Flow', m.flow)
   push('Street', props.result?.street)
@@ -136,6 +128,16 @@ const facts = computed(() => {
   push('Thinned from', m.thinnedFrom ? `${m.thinnedFrom}-way at the ${m.thinnedAt}` : null)
   push('Narrowed on', m.narrowRegime)
   push('Narrow time', m.narrowSeconds != null ? `${num(m.narrowSeconds, 3)} s` : null)
+  // Exploit-only: how the search was shaped, and what it was reading.
+  push('Runouts', m.chance ? JSON.stringify(m.chance) : null)
+  push('Leaf', m.leaf)
+  push('Card removal', m.removal)
+  push('Bet menu', Array.isArray(m.menuBets) ? m.menuBets.join(' / ') + '%' : null)
+  push('Raise menu', Array.isArray(m.menuRaises) ? m.menuRaises.join(' / ') + '%' : null)
+  push('Nodes', m.nodes != null ? Number(m.nodes).toLocaleString() : null)
+  push('Model calls', m.predicts)
+  push('Villain stats read', Array.isArray(m.villainStats) ? m.villainStats.join(', ') : null)
+  push('Over hands', m.villainStatHands != null ? Number(m.villainStatHands).toLocaleString() : null)
   push('Hand class', m.handClass)
   push('Effective stack', m.effectiveBB != null ? `${num(m.effectiveBB)} BB` : null)
   push('Raises before', m.raisesBefore)
@@ -167,8 +169,8 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
         </span>
         <template v-if="answer">
           <span class="sep">·</span>
-          <span class="chip read">
-            {{ askedLabel }}<i v-if="resolvedNote">{{ resolvedNote }}</i>
+          <span class="chip read" :class="{ exploit: isExploit, fell: fellBack }">
+            {{ served.title }}<i v-if="fellBack">asked {{ askedLabel }}</i>
           </span>
           <button class="badge" :class="solver.tone" @click="solverHelp = true">
             {{ solver.title }}
@@ -192,13 +194,9 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
     <template v-if="answer">
       <!-- what to play -------------------------------------------------- -->
       <div class="picks">
-        <div class="pick" :style="{ '--tone': tone(answer.sampledExploit) }">
-          <span class="plabel">{{ twoColumn ? 'Play (exploit)' : 'Play' }}</span>
-          <span class="pval">{{ answer.sampledExploit?.action || '—' }}</span>
-        </div>
-        <div v-if="twoColumn" class="pick" :style="{ '--tone': tone(answer.sampledGto) }">
-          <span class="plabel">GTO</span>
-          <span class="pval">{{ answer.sampledGto?.action || '—' }}</span>
+        <div class="pick" :style="{ '--tone': tone(answer.sampled) }">
+          <span class="plabel">{{ isExploit ? 'Play (max EV)' : 'Play (GTO)' }}</span>
+          <span class="pval">{{ answer.sampled?.action || '—' }}</span>
         </div>
       </div>
 
@@ -207,13 +205,20 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
         <thead>
           <tr>
             <th class="a">Action</th>
-            <th v-if="twoColumn" class="n">GTO</th>
-            <th class="n">{{ twoColumn ? 'Exploit' : 'Strategy' }}</th>
-            <th v-if="twoColumn" class="n d">Δ</th>
+            <template v-if="isExploit">
+              <th class="n">EV (BB)</th>
+              <th class="n">% pot</th>
+              <th class="n d">Support</th>
+            </template>
+            <th v-else class="n">Frequency</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in rows" :key="r.action" :class="{ dead: r.exploit < 0.0005 }">
+          <tr
+            v-for="(r, i) in rows"
+            :key="r.action"
+            :class="{ dead: !isExploit && r.probability < 0.0005, top: isExploit && i === 0 }"
+          >
             <td class="a">
               <span class="swatch" :style="{ background: r.color }" />
               <span class="akey">{{ r.action }}</span>
@@ -221,32 +226,43 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
                 DECISION_LABELS[r.decision] || r.decision
               }}</span>
             </td>
-            <td v-if="twoColumn" class="n tnum muted">{{ pct(r.gto) }}</td>
-            <td class="n tnum strong">{{ pct(r.exploit) }}</td>
-            <td v-if="twoColumn" class="n d tnum">
-              <span v-if="r.delta" :class="r.delta > 0 ? 'up' : 'down'">
-                {{ r.delta > 0 ? '+' : '−' }}{{ pct(Math.abs(r.delta)) }}
-              </span>
-            </td>
+            <template v-if="isExploit">
+              <td class="n tnum strong">{{ num(r.evBB, 2) }}</td>
+              <td class="n tnum muted">
+                {{ r.evPot == null ? '' : `${(r.evPot * 100).toFixed(0)}%` }}
+              </td>
+              <td class="n d tnum" :class="{ thin: r.support != null && r.support < 0.02 }">
+                {{ r.support == null ? '' : `${(r.support * 100).toFixed(1)}%` }}
+              </td>
+            </template>
+            <td v-else class="n tnum strong">{{ pct(r.probability) }}</td>
           </tr>
         </tbody>
       </table>
 
-      <!-- the read, in one line ------------------------------------------- -->
-      <div v-if="blurb" class="readline">
-        <strong>{{ profileLabel }}</strong>
-        <span class="blurb">{{ blurb }}</span>
-        <HelpButton :size="16" :label="`About ${profileLabel}`" @click="readHelp = true" />
-      </div>
-      <div v-else-if="!twoColumn" class="readline">
+      <!-- the regime, in one line ----------------------------------------- -->
+      <div class="readline">
+        <strong>{{ served.title }}</strong>
         <span class="blurb">
           {{
-            result.street === 'preflop'
-              ? 'Preflop is a chart, already bent by the opponents’ stats — there is no GTO twin.'
-              : 'No read served: this is the equilibrium answer.'
+            isExploit
+              ? `Maximum EV against this villain’s measured behaviour. The top row is the move — there is nothing to mix at, and every EV is counted from this decision on.`
+              : result.street === 'preflop'
+                ? 'A chart, already bent by the opponents’ stats — mix at these frequencies.'
+                : 'The equilibrium strategy at this node — mix at these frequencies.'
           }}
         </span>
       </div>
+
+      <p v-if="fellBack" class="fellback">
+        <strong>{{ askedLabel }} was asked for and could not be answered here</strong> — this is
+        the GTO answer instead.
+        <button class="linky" @click="details = true">Why</button>
+      </p>
+
+      <p v-if="thinBest" class="fellback">
+        The recommended size has thin population support — the models are extrapolating there.
+      </p>
 
       <p v-if="warnings.length" class="warncount">
         {{ warnings.length }} warning{{ warnings.length > 1 ? 's' : '' }} —
@@ -281,51 +297,25 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
     >
       <p class="para"><strong>{{ solver.summary }}</strong></p>
       <p class="para pre">{{ solver.detail }}</p>
-      <template v-if="meta.flow && FLOWS[meta.flow]">
+      <template v-if="meta.flow">
         <h4>Flow: {{ meta.flow }}</h4>
-        <p class="para">{{ FLOWS[meta.flow] }}</p>
+        <p class="para">{{ describeFlow(meta.flow) }}</p>
       </template>
-      <h4>Reading the two columns</h4>
+      <h4>Reading the numbers</h4>
       <p class="para">
-        <strong>GTO</strong> is the equilibrium strategy at this node. <strong>Exploit</strong> is
-        the best response to the opponent model, regularized back toward GTO by that profile’s
-        fitted temperature — it commits only where the modelled edge is large. With no read served
-        the two are the same and only one column is shown. <strong>Play</strong> is one random draw
-        from the distribution: take it if you want to mix at the stated frequencies.
+        In the <strong>GTO</strong> regime the column is a distribution: mix at those
+        frequencies, and <strong>Play</strong> is one random draw from it. In the
+        <strong>Exploit</strong> regime there is nothing to mix — the rows are ranked by EV
+        against the modelled opponent and the top one is the move.
       </p>
-    </InfoSheet>
-
-    <InfoSheet
-      v-if="readHelp && readProfile"
-      :title="readProfile.title"
-      :subtitle="readProfile.cluster || `profile: ${readProfile.name}`"
-      @close="readHelp = false"
-    >
-      <p class="para">{{ readProfile.description }}</p>
-      <h4>How it differs, and what beats it</h4>
-      <p class="para">{{ readProfile.exploit }}</p>
-      <template v-if="signature.length">
-        <h4>Cluster signature</h4>
-        <div class="sig">
-          <div v-for="s in signature" :key="s.key" class="sigrow">
-            <span class="sk">{{ s.label }}</span>
-            <span class="sv tnum">{{ s.value }}{{ s.unit }}</span>
-          </div>
-        </div>
-      </template>
-      <template v-if="readProfile.temp != null">
-        <h4>Serving</h4>
-        <div class="sig">
-          <div class="sigrow">
-            <span class="sk">Temperature</span>
-            <span class="sv tnum">{{ readProfile.temp }}</span>
-          </div>
-          <div class="sigrow">
-            <span class="sk">Serving intensity</span>
-            <span class="sv tnum">{{ readProfile.serving }}</span>
-          </div>
-        </div>
-      </template>
+      <p class="para">
+        <strong>EV (BB)</strong> counts from this decision on: chips already in the pot are sunk,
+        so folding is 0 by construction and every other number is read against it.
+        <strong>% pot</strong> is the same number over the pot at the node.
+        <strong>Support</strong> is the share of real play the size models saw at that size — a
+        winning branch under about 2% is one the models are extrapolating on, which the warnings
+        also say.
+      </p>
     </InfoSheet>
 
     <InfoSheet
@@ -402,6 +392,17 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
   font-style: normal;
   color: var(--label-2);
   font-weight: 550;
+}
+
+/* The regime that actually ran, in the colour the picker uses for it. */
+.chip.read.exploit {
+  background: color-mix(in srgb, var(--orange) 18%, transparent);
+  color: color-mix(in srgb, var(--orange) 86%, var(--label));
+}
+
+.chip.read.fell {
+  background: color-mix(in srgb, var(--orange) 18%, transparent);
+  color: color-mix(in srgb, var(--orange) 86%, var(--label));
 }
 
 .badge {
@@ -526,12 +527,12 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
 .freq th.n,
 .freq td.n {
   text-align: right;
-  width: 68px;
+  width: 66px;
 }
 
 .freq th.d,
 .freq td.d {
-  width: 58px;
+  width: 62px;
 }
 
 .freq td {
@@ -587,16 +588,13 @@ td.n.muted {
   color: var(--label-2);
 }
 
-.up {
-  color: color-mix(in srgb, var(--green) 78%, var(--label));
-  font-size: 11.5px;
-  font-weight: 700;
+/* The recommendation, in a ranking where only the first row is the answer. */
+tr.top td {
+  background: color-mix(in srgb, var(--orange) 9%, transparent);
 }
 
-.down {
-  color: color-mix(in srgb, var(--red) 84%, var(--label));
-  font-size: 11.5px;
-  font-weight: 700;
+td.n.thin {
+  color: color-mix(in srgb, var(--orange) 86%, var(--label));
 }
 
 /* --- read line ------------------------------------------------------ */
@@ -621,6 +619,20 @@ td.n.muted {
   flex: 1;
   min-width: 0;
   color: var(--label-2);
+}
+
+.fellback {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+  color: color-mix(in srgb, var(--orange) 86%, var(--label));
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.fellback strong {
+  font-weight: 660;
 }
 
 .warncount {

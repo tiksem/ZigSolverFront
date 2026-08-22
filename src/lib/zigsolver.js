@@ -1,14 +1,17 @@
 /**
  * The ZigSolver API client.
  *
- * Every snapshot the bot host pushes is POSTed here as the /move `body`, and
- * the same body is re-POSTed with a `profile` when you ask for a recalculation.
+ * Every snapshot the bot host pushes is POSTed here as the /move `body`, under
+ * one `regime`: `gto` (the equilibrium strategy at the node) or `exploit` (the
+ * maximum-EV action against the villain's measured behaviour). Never both — the
+ * endpoint answers one question per call.
  *
  * The one thing worth knowing: `handId`. It keys the per-hand tree cache, so a
- * re-solve of the same spot under a different read is one best-response pass
- * (~0.2s) instead of a full solve, and a later street reuses the tree the
- * earlier one built. It must be stable WITHIN a hand and distinct ACROSS hands —
- * a handId whose tree was solved for a different hero hand keeps that tree.
+ * later street reuses the tree the earlier one built. It must be stable WITHIN
+ * a hand and distinct ACROSS hands — a handId whose tree was solved for a
+ * different hero hand keeps that tree. It does nothing for an exploit answer:
+ * that regime walks the hand rather than a subgame and is recomputed every
+ * call, by design.
  */
 
 import { buildAnswer, buildError } from './moveResult'
@@ -30,17 +33,23 @@ function detailOf(payload, fallback) {
  * POST /move.
  *
  * @param {string} url        absolute URL of the endpoint
- * @param {object} req        { body, handId, profile, autoProfile, maxSolveTime }
+ * @param {object} req        { body, handId, regime, maxSolveTime, statHands,
+ *                              gateExploitability, targetExploitability,
+ *                              minSolveTime }
  * @param {AbortSignal} signal
  */
 export async function solveMove(url, req, signal) {
-  const payload = { body: req.body }
+  const payload = { body: req.body, regime: req.regime || 'gto' }
   if (req.handId) payload.handId = req.handId
   if (req.requestId) payload.requestId = req.requestId
-  if (req.profile) payload.profile = req.profile
-  if (req.autoProfile === false) payload.autoProfile = false
   if (req.maxSolveTime) payload.maxSolveTime = req.maxSolveTime
   if (req.statHands) payload.statHands = req.statHands
+  // Flop tuning: omitted means "the API's own default", so these are sent on a
+  // null check rather than a truthy one — gateExploitability 0 is a real
+  // setting (never solve exactly), not an absent one.
+  for (const k of ['gateExploitability', 'targetExploitability', 'minSolveTime']) {
+    if (req[k] !== null && req[k] !== undefined && req[k] !== '') payload[k] = req[k]
+  }
 
   let res
   try {

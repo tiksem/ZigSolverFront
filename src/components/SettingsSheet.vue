@@ -3,13 +3,16 @@
  * The solve settings. Each row says what the option does at the endpoint, so
  * the sheet doubles as the documentation for the /move fields it drives.
  */
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import InfoSheet from './InfoSheet.vue'
 import {
   settings,
   setSetting,
   resetSettings,
+  noteServerInfo,
+  serverDefault,
   BUDGET_PRESETS,
+  GATE_PRESETS,
   DEFAULTS,
 } from '../lib/settings'
 import {
@@ -18,7 +21,9 @@ import {
   setServer,
   setApi,
   parseServer,
+  apiUrl,
 } from '../lib/server'
+import { health } from '../lib/zigsolver'
 
 const emit = defineEmits(['close'])
 
@@ -28,6 +33,24 @@ const dirty = computed(() =>
 
 const hostOk = computed(() => !!parseServer(serverInput.value))
 const apiOk = computed(() => !!parseServer(apiInput.value))
+
+// The three flop knobs show the API's OWN defaults as their placeholder, so an
+// untouched row says what the server will really do instead of a number this
+// app made up. Re-read every time the sheet opens: the API may have moved.
+onMounted(async () => {
+  const url = apiUrl('/health')
+  if (!url) return
+  try {
+    noteServerInfo(await health(url))
+  } catch {
+    /* unreachable API: the placeholders just read "server default" */
+  }
+})
+
+function placeholder(key) {
+  const v = serverDefault(key, Number(settings.maxSolveTime))
+  return v === null ? 'server default' : v
+}
 </script>
 
 <template>
@@ -40,8 +63,10 @@ const apiOk = computed(() => !!parseServer(apiInput.value))
           <strong>Solve budget</strong>
           <span class="desc">
             <code>maxSolveTime</code> — the wall-time budget for the flop solve. The balancer
-            runs the strongest regime that fits it: full menus, then reduced menus, then the
-            net-truncated flow. More time buys a better answer, not a different question.
+            runs the strongest regime that fits it: full menus, then reduced menus, then
+            reduced menus with clustered turn runouts, then the net-truncated flow. Three-way
+            pots ladder the same way over the blueprint’s betting menus. More time buys a
+            better answer, not a different question.
           </span>
         </div>
         <div class="ctl">
@@ -73,7 +98,7 @@ const apiOk = computed(() => !!parseServer(apiInput.value))
           <strong>Solve every snapshot</strong>
           <span class="desc">
             Send each snapshot to the API the moment it arrives. Off, the table still draws and
-            only Re-solve or a read button calls the solver.
+            only Re-solve or a change of regime calls the solver.
           </span>
         </div>
         <input
@@ -107,9 +132,9 @@ const apiOk = computed(() => !!parseServer(apiInput.value))
           <strong>Per-hand tree cache</strong>
           <span class="desc">
             <code>handId</code> — keys the solved tree to this hand, so the next street and any
-            re-solve under a different read reuse it. A profile answer becomes one
-            best-response pass (~0.2s) instead of a full solve. Off, every call solves from
-            scratch.
+            re-solve reuse it instead of solving from scratch. GTO only: an Exploit answer walks
+            the hand rather than a subgame, so there is nothing for a later street to inherit
+            and it is recomputed every time either way.
           </span>
         </div>
         <input
@@ -125,8 +150,10 @@ const apiOk = computed(() => !!parseServer(apiInput.value))
           <strong>Stat sample size</strong>
           <span class="desc">
             <code>statHands</code> — how many hands the HUD stats in the snapshot cover. It
-            drives both the profile fit and its temperature: a 150-hand read is played much
-            closer to GTO than a 5,000-hand one. Leave empty when you do not know.
+            prices the read the Exploit regime runs on: everything the HUD does not carry is
+            imputed from the population, and a thin sample widens those imputations rather than
+            pretending to a measurement. Leave empty when you do not know — it is then read as
+            “a lot”, i.e. the read at full strength.
           </span>
         </div>
         <input
@@ -144,8 +171,9 @@ const apiOk = computed(() => !!parseServer(apiInput.value))
         <div class="lab">
           <strong>Hold the sampled action</strong>
           <span class="desc">
-            Keep one draw while the same spot is re-solved, so comparing reads does not also
-            re-roll the dice. Off, every answer samples fresh.
+            Keep one draw while the same spot is re-solved, so a re-solve does not also re-roll
+            the dice. Off, every answer samples fresh. GTO only — an Exploit answer is a ranking
+            by EV, not a distribution, and its top row is the move.
           </span>
         </div>
         <input
@@ -153,6 +181,95 @@ const apiOk = computed(() => !!parseServer(apiInput.value))
           type="checkbox"
           :checked="settings.stableSample"
           @change="setSetting('stableSample', $event.target.checked)"
+        />
+      </div>
+    </section>
+
+    <section class="grp">
+      <h4>Flop solve quality</h4>
+      <p class="note">
+        The three numbers the flop regime ladder runs on. Leave a field empty to use the
+        API’s own default (shown greyed). Flop only — turn and river are always solved as
+        their own street at the widest sizing grid.
+      </p>
+
+      <div class="row col">
+        <div class="lab">
+          <strong>Solve exactly when it beats</strong>
+          <span class="desc">
+            <code>gateExploitability</code> — % of pot. Before choosing, the balancer predicts
+            how exploitable each regime’s solve would be at the iterations your budget buys,
+            and takes the strongest one at or under this. The net-truncated flow it falls back
+            to measures 5.6–12% itself, so anything below that is a real preference for an
+            exact solve. Lower is stricter: fewer spots qualify and more drop to the net.
+            <strong>0</strong> never solves exactly.
+          </span>
+        </div>
+        <div class="ctl">
+          <div class="presets">
+            <button
+              v-for="g in GATE_PRESETS"
+              :key="g"
+              class="preset"
+              :class="{ on: settings.gateExploitability === g }"
+              @click="setSetting('gateExploitability', g)"
+            >
+              {{ g }}%
+            </button>
+          </div>
+          <input
+            class="field num"
+            type="number"
+            min="0"
+            max="100"
+            step="0.5"
+            :placeholder="placeholder('gateExploitability')"
+            :value="settings.gateExploitability ?? ''"
+            @change="setSetting('gateExploitability', $event.target.value)"
+          />
+        </div>
+      </div>
+
+      <div class="row col">
+        <div class="lab">
+          <strong>Stop at</strong>
+          <span class="desc">
+            <code>targetExploitability</code> — % of pot. The solve runs its own best-response
+            check as it goes and stops once it reaches this. Lower keeps it iterating longer
+            for a sharper answer; the budget still ends it either way.
+          </span>
+        </div>
+        <input
+          class="field num wide"
+          type="number"
+          min="0.01"
+          max="100"
+          step="0.1"
+          :placeholder="placeholder('targetExploitability')"
+          :value="settings.targetExploitability ?? ''"
+          @change="setSetting('targetExploitability', $event.target.value)"
+        />
+      </div>
+
+      <div class="row col">
+        <div class="lab">
+          <strong>Minimum solve time</strong>
+          <span class="desc">
+            <code>minSolveTime</code> — seconds. A floor under the stop above: a flop that
+            reaches the target in two seconds keeps improving until this much time is spent,
+            which is most of what the budget buys on an easy board. It never runs past the
+            solve budget — a value above it is clamped, and the answer says so.
+          </span>
+        </div>
+        <input
+          class="field num wide"
+          type="number"
+          min="0"
+          max="600"
+          step="0.5"
+          :placeholder="placeholder('minSolveTime')"
+          :value="settings.minSolveTime ?? ''"
+          @change="setSetting('minSolveTime', $event.target.value)"
         />
       </div>
     </section>
@@ -206,6 +323,13 @@ const apiOk = computed(() => !!parseServer(apiInput.value))
 <style scoped>
 .grp + .grp {
   margin-top: 8px;
+}
+
+.note {
+  margin: 0 0 2px;
+  color: var(--label-2);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 h4 {

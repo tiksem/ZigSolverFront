@@ -7,16 +7,19 @@
  * and the answer is what the panel renders — there is no mode=1 socket in this
  * flow; the front end is the one calling the solver.
  *
- * Picking a read re-POSTs the SAME body with that profile. Because the call
- * carries a handId, the endpoint answers it off the tree it already solved
- * (one best-response pass) rather than solving the spot again.
+ * The regime picks which question goes out with the snapshot. `manual` is the
+ * one that changes the flow rather than the payload: the solve is HELD until
+ * the operator picks, so a decision they have not answered yet has spent no
+ * budget. It is only held where the choice matters — a spot the exploit regime
+ * cannot answer would come back GTO either way, so it goes straight out.
  */
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import AppNav from '../components/AppNav.vue'
 import StatusDot from '../components/StatusDot.vue'
 import PokerTable from '../components/PokerTable.vue'
-import ProfileBar from '../components/ProfileBar.vue'
+import RegimeBar from '../components/RegimeBar.vue'
+import RegimePrompt from '../components/RegimePrompt.vue'
 import SolverPanel from '../components/SolverPanel.vue'
 import { useSocket } from '../lib/useSocket'
 import { parseHandBody } from '../lib/handBody'
@@ -34,7 +37,7 @@ import {
   displayApi,
 } from '../lib/server'
 import { settings } from '../lib/settings'
-import { PROFILE_BY_NAME } from '../lib/profiles'
+import { regime, setRegime, exploitAvailability } from '../lib/regime'
 
 const props = defineProps({ index: { type: Number, required: true } })
 const router = useRouter()
@@ -45,9 +48,16 @@ const hand = ref(null)
 const result = ref(null)
 const solving = ref(false)
 const feed = ref([])
-/** 'auto' | 'gto' | a profile name */
-const read = ref('auto')
 const showSettings = ref(false)
+
+/**
+ * Manual mode: the snapshot waiting for a regime to be picked, or null.
+ *
+ * Holding the BODY rather than a flag, because a newer snapshot supersedes an
+ * unanswered question — you should never be answering a spot the table has
+ * already moved past.
+ */
+const pending = ref(null)
 
 /**
  * The snapshot currently being answered — what a re-solve re-sends. A ref, not
@@ -87,6 +97,21 @@ const handIdFor = createHandIds(props.index)
 const handUrl = computed(() => socketUrl(MODE_HAND, props.index))
 const canSolve = computed(() => !!lastBody.value && !!api.value)
 
+/** Whether the exploit regime can answer the snapshot on screen, and why not. */
+const exploit = computed(() => exploitAvailability(hand.value))
+
+/**
+ * The regime to actually send. `manual` is not one, so it only ever reaches
+ * here resolved; and on a spot exploit cannot answer, asking would be asking a
+ * question with one answer.
+ */
+function regimeToSend(picked) {
+  const want = picked || regime.selected
+  if (want === 'manual') return 'gto'
+  if (want === 'exploit' && !exploit.value.ok) return 'gto'
+  return want
+}
+
 const handSock = useSocket({
   url: handUrl,
   onMessage: (data) => onHandMessage(String(data)),
@@ -101,7 +126,21 @@ function onHandMessage(text) {
     hand.value = parsed
     lastBody.value = parsed.raw
     lastHandId = handIdFor(parsed)
-    if (settings.autoSolve && (!unchanged || !result.value)) scheduleSolve()
+    if (settings.autoSolve && (!unchanged || !result.value)) {
+      // Manual mode asks first — and asks about the NEWEST snapshot, so a
+      // question raised for a spot the table has moved past is replaced rather
+      // than answered.
+      if (regime.selected === 'manual' && exploit.value.ok) {
+        abortInFlight()
+        clearTimeout(coalesceTimer)
+        coalesceTimer = null
+        updateBusy()
+        pending.value = parsed
+      } else {
+        pending.value = null
+        scheduleSolve()
+      }
+    }
     return
   }
   if (/new hand/i.test(text)) {
@@ -114,6 +153,7 @@ function onHandMessage(text) {
     hand.value = null
     result.value = null
     lastBody.value = null
+    pending.value = null
     feed.value = []
   }
   // Everything the host says that is not a snapshot: a notification now, and
@@ -156,10 +196,11 @@ function scheduleSolve() {
   updateBusy()
 }
 
-/** POST the current snapshot under the current read. */
-async function solve() {
+/** POST the current snapshot under `picked`, or the selected regime. */
+async function solve(picked = null) {
   clearTimeout(coalesceTimer)
   coalesceTimer = null
+  pending.value = null
   const url = apiUrl('/move')
   if (!url || !lastBody.value) return updateBusy()
 
@@ -178,9 +219,10 @@ async function solve() {
     requestId: rid,
     maxSolveTime: settings.maxSolveTime,
     statHands: settings.statHands,
-    profile: read.value === 'auto' || read.value === 'gto' ? null : read.value,
-    autoProfile: read.value !== 'gto',
-    readLabel: read.value,
+    gateExploitability: settings.gateExploitability,
+    targetExploitability: settings.targetExploitability,
+    minSolveTime: settings.minSolveTime,
+    regime: regimeToSend(picked),
   }
 
   updateBusy()
@@ -188,11 +230,18 @@ async function solve() {
     const out = await solveMove(url, request, controller.signal)
     if (out.type === 'cancelled') return
     if (seq === solveSeq) {
-      // Comparing two reads on one spot should not also re-roll the dice.
-      if (settings.stableSample && out.type === 'answer' && result.value?.type === 'answer') {
-        const held = result.value.sampledExploit
-        const still = held && out.exploit.find((a) => a.action === held.action)
-        if (still) out.sampledExploit = still
+      // Re-solving the same spot should not also re-roll the dice. Only a GTO
+      // answer has a draw to hold; an exploit answer's top row is the move.
+      if (
+        settings.stableSample &&
+        out.type === 'answer' &&
+        out.regime === 'gto' &&
+        result.value?.type === 'answer' &&
+        result.value.regime === 'gto'
+      ) {
+        const held = result.value.sampled
+        const still = held && out.actions.find((a) => a.action === held.action)
+        if (still) out.sampled = still
       }
       result.value = out
     }
@@ -209,14 +258,19 @@ async function solve() {
   }
 }
 
-function selectRead(value) {
-  read.value = value
-  // A named profile is the runner's read too — same token the old page sent.
-  if (PROFILE_BY_NAME[value]) {
-    const sent = handSock.send(value)
-    showToast(sent ? `Read: ${value} — re-solving` : `Re-solving as ${value} (table offline)`, sent)
+function selectRegime(value) {
+  setRegime(value)
+  if (value === 'manual') {
+    // Switching INTO manual mid-hand asks about the spot on screen rather than
+    // waiting for the table to move; there is an answer up already, so nothing
+    // is lost by leaving it there until the question is answered.
+    abortInFlight()
+    updateBusy()
+    if (lastBody.value && exploit.value.ok) pending.value = hand.value
+    return
   }
-  solve()
+  pending.value = null
+  if (lastBody.value) solve()
 }
 
 function command(token) {
@@ -240,7 +294,7 @@ watch(
     result.value = null
     feed.value = []
     lastBody.value = null
-    read.value = 'auto'
+    pending.value = null
     handSock.reconnect()
   },
 )
@@ -313,18 +367,27 @@ onBeforeUnmount(() => {
       </div>
 
       <aside class="side">
-        <ProfileBar
+        <RegimeBar
           :disabled="handSock.status.value !== 'open'"
-          :selected="read"
+          :selected="regime.selected"
+          :exploit-ok="exploit.ok"
+          :exploit-why="exploit.why"
           :solving="solving"
           :can-solve="canSolve"
-          @select="selectRead"
+          @select="selectRegime"
           @command="command"
-          @resolve="solve"
+          @resolve="solve()"
           @settings="showSettings = true"
         />
 
-        <SolverPanel :result="result" :pending="solving" :read="read" />
+        <RegimePrompt
+          v-if="pending"
+          :hand="pending.heroHand ? pending.heroHand.join('') : null"
+          :street="pending.streetName"
+          @pick="solve"
+        />
+
+        <SolverPanel :result="result" :pending="solving" :regime="regime.selected" />
       </aside>
     </div>
 

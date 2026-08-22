@@ -21,6 +21,7 @@ import MessageDock from '../components/MessageDock.vue'
 import { notify } from '../lib/notify'
 import { useSocket } from '../lib/useSocket'
 import { health } from '../lib/zigsolver'
+import { noteServerInfo } from '../lib/settings'
 import {
   INDEXES_TABLE_INDEX,
   MODE_HAND,
@@ -81,6 +82,8 @@ async function probeApi() {
   apiState.value = { state: 'checking', text: 'Checking…' }
   try {
     const info = await health(url)
+    // The API's own flop-tuning defaults, for the settings sheet's placeholders.
+    noteServerInfo(info)
     const bits = [
       info.status,
       info.libVersion ? `lib ${info.libVersion}` : null,
