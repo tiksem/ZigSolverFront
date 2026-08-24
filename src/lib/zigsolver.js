@@ -63,14 +63,10 @@ export async function solveMove(url, req, signal) {
     if (e.name === 'AbortError') throw e
     // fetch() rejects identically for "host is down" and "the browser blocked
     // the response because it carried no CORS header", so say both.
-    return buildError(`Could not reach the ZigSolver API at ${url}`, {
-      hint:
-        'Either the API is not running there, or it is running but does not send ' +
-        'CORS headers — a browser refuses a cross-origin response without them. ' +
-        'See the README: add CORSMiddleware to api/server.py, or serve this app ' +
-        'from the same origin as the API.',
-      request: req,
-    })
+    return buildError(
+      { key: 'api.unreachable', params: { url } },
+      { hint: { key: 'api.unreachableHint' }, request: req },
+    )
   }
 
   let parsed = null
@@ -90,19 +86,17 @@ export async function solveMove(url, req, signal) {
   if (!res.ok) {
     return buildError(detailOf(parsed, text || `${res.status} ${res.statusText}`), {
       payload: parsed ?? text,
-      hint:
-        res.status === 400
-          ? 'The endpoint refused the snapshot — /move is strict about the ' +
-            'sequence and only answers when the body ends on the hero’s decision.'
-          : null,
+      hint: res.status === 400 ? { key: 'api.refusedHint' } : null,
       request: req,
+      status: res.status,
     })
   }
 
   if (!parsed || !Array.isArray(parsed.actions)) {
-    return buildError('The API returned a body that is not a /move answer', {
+    return buildError({ key: 'api.notAnAnswer' }, {
       payload: parsed ?? text,
       request: req,
+      status: res.status,
     })
   }
   return buildAnswer(parsed, req)

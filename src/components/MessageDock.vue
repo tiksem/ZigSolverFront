@@ -8,21 +8,28 @@
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import NotificationStack from './NotificationStack.vue'
+import { persistentRef } from '../lib/persist'
+import { t } from '../lib/i18n'
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
-  title: { type: String, default: 'Messages' },
+  /** Null falls back to the generic title, translated. */
+  title: { type: String, default: null },
 })
 const emit = defineEmits(['clear'])
 
-const KEY = 'zigsolver.dock'
-
-const open = ref(false)
+// Older builds stored the words 'open' / 'closed' under this key; read them so
+// an already-expanded dock stays expanded across the change.
+const open = persistentRef('zigsolver.dock', false, (v) => {
+  if (typeof v === 'boolean') return v
+  if (v === 'open') return true
+  if (v === 'closed') return false
+  return undefined
+})
 const unread = ref(0)
 let seen = 0
 
 onMounted(() => {
-  open.value = localStorage.getItem(KEY) === 'open'
   seen = props.messages.length
 })
 
@@ -41,7 +48,6 @@ watch(
 
 function toggle() {
   open.value = !open.value
-  localStorage.setItem(KEY, open.value ? 'open' : 'closed')
   if (open.value) {
     unread.value = 0
     seen = props.messages.length
@@ -50,6 +56,7 @@ function toggle() {
 
 const badge = computed(() => (unread.value > 99 ? '99+' : String(unread.value)))
 const clock = (ts) => new Date(ts).toLocaleTimeString()
+const heading = computed(() => props.title || t('dock.title'))
 </script>
 
 <template>
@@ -60,13 +67,13 @@ const clock = (ts) => new Date(ts).toLocaleTimeString()
       <Transition name="panel">
         <section v-if="open" class="panel">
           <header class="head">
-            <span class="eyebrow">{{ title }}</span>
+            <span class="eyebrow">{{ heading }}</span>
             <span v-if="messages.length" class="count">{{ messages.length }}</span>
             <div class="spacer" />
             <button class="mini" :disabled="!messages.length" @click="emit('clear')">
-              Clear
+              {{ t('common.clear') }}
             </button>
-            <button class="mini icon" title="Minimize" @click="toggle">
+            <button class="mini icon" :title="t('common.minimize')" @click="toggle">
               <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
                 <path
                   d="M5 8 L10 13 L15 8"
@@ -86,7 +93,7 @@ const clock = (ts) => new Date(ts).toLocaleTimeString()
               <span class="mono text">{{ m.text }}</span>
             </li>
           </ul>
-          <p v-else class="empty">Nothing from the host yet.</p>
+          <p v-else class="empty">{{ t('dock.empty') }}</p>
         </section>
       </Transition>
 
@@ -100,7 +107,7 @@ const clock = (ts) => new Date(ts).toLocaleTimeString()
             stroke-linejoin="round"
           />
         </svg>
-        <span class="lbl">{{ title }}</span>
+        <span class="lbl">{{ heading }}</span>
         <span v-if="unread > 0" class="badge">{{ badge }}</span>
         <span v-else-if="messages.length" class="total">{{ messages.length }}</span>
       </button>

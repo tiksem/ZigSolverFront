@@ -133,6 +133,36 @@ Three details that matter:
 * **An identical body** re-sent (a re-read of the same spot) does not spend a
   solve at all.
 
+## Photographing a failed call
+
+A `/move` that comes back an error is almost never a solver problem: it is a
+**misread**. The host's extractor wrote a stack the table never had, dealt a
+card twice, or lost the block that says whose turn it is, and the endpoint
+refused a body describing a table that cannot exist. The snapshot is evidence of
+*what was read* — only the pixels show what there was to read.
+
+So a failed call takes a picture. The app fetches **`GET /image/{tableIndex}`**
+from the bot host (the same host its socket is on; a PNG, optionally encrypted
+with the same key as the socket frames — `lib/crypto.js` sniffs it the same way,
+on PNG's signature rather than on "does this decode as text") and posts it to
+the API's **`POST /screenError`**, which files it under `screenerrors/` named
+for the hand and the moment, with the error, the refused body and the
+`requestId` beside it. See `lib/screenError.js` and the API README.
+
+The image is forwarded **byte for byte, at full resolution** — no canvas, no
+re-encode, no resize. A rank read as the wrong rank is a handful of pixels, and
+a resample would take exactly the evidence the capture exists to preserve.
+
+Three rules, all of them about not making a bad moment worse:
+
+* **Every failure is swallowed.** You have already been shown the error that
+  matters; a diagnostic that could not be taken is not a second one to read.
+* **One capture at a time**, and none at all when the failure was the API being
+  unreachable — that is the one error whose capture has nowhere to go, and a
+  screenshot is megabytes.
+* **The same hand failing the same way is captured once.** Auto-solve re-sends
+  on every re-read, and those are all pictures of one bug.
+
 ## Settings
 
 The gear in the nav, or the chip next to Re-solve. Each row says what the option
@@ -165,7 +195,10 @@ regime covers, so it is the table to point at for that and for Manual), table
 table **9** a full 9-max ring. The fake
 `/move` takes 2.5s so cancellation is observable, implements `/cancel` and
 supersede-on-reuse like the real one, and answers both regimes — the exploit one
-with EVs and support, so the panel's second column set is exercised.
+with EVs and support, so the panel's second column set is exercised. Both hosts
+carry the failed-call capture path: `GET /image/N` serves a stand-in screenshot
+(a felt with the table number on it, drawn by [fakebot/png.js](fakebot/png.js)),
+and the fake `/screenError` logs what it was posted instead of storing it.
 
 Those four snapshots never move, and the answers are canned. To point the app at
 the **real solver** and still not need a poker client, there is
@@ -183,6 +216,17 @@ because a real solve takes ~20s on a flop and ~70s on an exact turn or river; at
 the default 9s the hero acts first and you watch the supersede-and-cancel path
 instead.
 
+`--encrypt` puts every frame **and** the `/image/N` body through the same
+AES-256-CBC the Kotlin host uses, which is what proves the sniffing in
+`lib/crypto.js` against real ciphertext. To watch a capture happen end to end,
+lift the flop-width cap: the solver serves up to 5 players postflop and refuses
+anything wider, so a 6-way flop is a genuine 400 with a real screenshot behind
+it.
+
+```bash
+node fakebot/server.js 8080 --encrypt --max-flop-players 0 --speed 4
+```
+
 ## Layout
 
 ```
@@ -194,6 +238,7 @@ src/
               regime.js     gto|exploit|manual, and where exploit applies
               notify.js     transient notifications
               solvers.js    what each solver regime means
+              screenError.js the failed-call screen capture
               server.js     the two hosts; socket and http URLs
               useSocket.js  reconnecting WebSocket composable
   components/ PokerTable · SeatPod · PlayingCard · SolverPanel
@@ -202,7 +247,8 @@ src/
               MessageDock · NotificationStack · AppNav · StatusDot
   views/      ConnectView · TableView · CheckView
 mock/         the two hosts as fixed snapshots
-fakebot/      a bot host with a simulated game behind it
+fakebot/      a bot host with a simulated game behind it (png.js draws the
+              stand-in screenshot /image/N serves)
 legacy/       the original static pages, kept for reference
 ```
 

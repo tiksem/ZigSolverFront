@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import PlayingCard from './PlayingCard.vue'
 import { CORE_STATS } from '../lib/handBody'
+import { t } from '../lib/i18n'
 
 const props = defineProps({
   seat: { type: Object, required: true },
@@ -13,7 +14,7 @@ const fmt = (n, d = 1) =>
   n == null ? '—' : (Math.round(n * 10 ** d) / 10 ** d).toLocaleString()
 
 const displayName = computed(() =>
-  props.seat.isHero ? 'You' : props.seat.name.replace(/\s+/g, ' ').trim(),
+  props.seat.isHero ? t('seat.you') : props.seat.name.replace(/\s+/g, ' ').trim(),
 )
 
 const action = computed(() => {
@@ -22,17 +23,17 @@ const action = computed(() => {
   const amount = a.amount != null ? `${fmt(a.amount)}BB` : null
   switch (a.kind) {
     case 'fold':
-      return { text: 'Fold', tone: 'fold' }
+      return { text: t('seat.fold'), tone: 'fold' }
     case 'check':
-      return { text: 'Check', tone: 'check' }
+      return { text: t('seat.check'), tone: 'check' }
     case 'call':
-      return { text: amount ? `Call ${amount}` : 'Call', tone: 'call' }
+      return { text: amount ? t('seat.callAmount', { amount }) : t('seat.call'), tone: 'call' }
     case 'bet':
-      return { text: `Bet ${amount || ''}`.trim(), tone: 'bet' }
+      return { text: t('seat.bet', { amount: amount || '' }).trim(), tone: 'bet' }
     case 'raise':
-      return { text: `Raise ${amount || ''}`.trim(), tone: 'raise' }
+      return { text: t('seat.raise', { amount: amount || '' }).trim(), tone: 'raise' }
     case 'all-in':
-      return { text: 'All in', tone: 'allin' }
+      return { text: t('seat.allIn'), tone: 'allin' }
     default:
       return null
   }
@@ -63,9 +64,9 @@ const extraStatCount = computed(
   >
     <div class="badges">
       <span class="pos">{{ seat.position || '?' }}</span>
-      <span v-if="isButton" class="btn-chip" title="Dealer button">D</span>
-      <span v-if="seat.allIn" class="tag allin-tag">ALL IN</span>
-      <span v-else-if="seat.folded" class="tag fold-tag">FOLDED</span>
+      <span v-if="isButton" class="btn-chip" :title="t('seat.dealerButton')">D</span>
+      <span v-if="seat.allIn" class="tag allin-tag">{{ t('seat.allInTag') }}</span>
+      <span v-else-if="seat.folded" class="tag fold-tag">{{ t('seat.foldedTag') }}</span>
     </div>
 
     <div class="name" :title="seat.name">{{ displayName }}</div>
@@ -87,9 +88,9 @@ const extraStatCount = computed(
     </div>
 
     <div v-if="action" class="action" :class="action.tone">{{ action.text }}</div>
-    <div v-else-if="toAct" class="action waiting">To act…</div>
+    <div v-else-if="toAct" class="action waiting">{{ t('seat.toAct') }}</div>
 
-    <div v-if="seat.streetCommit > 0" class="commit" :title="'In front this street'">
+    <div v-if="seat.streetCommit > 0" class="commit" :title="t('seat.inFront')">
       <span class="chipstack" aria-hidden="true"><i /><i /><i /></span>
       <span class="tnum">{{ fmt(seat.streetCommit, 2) }}</span>
     </div>
@@ -170,7 +171,7 @@ const extraStatCount = computed(
 }
 
 .allin-tag {
-  background: color-mix(in srgb, var(--red) 82%, transparent);
+  background: color-mix(in srgb, var(--allin) 88%, transparent);
   color: #fff;
 }
 
@@ -278,7 +279,7 @@ const extraStatCount = computed(
 }
 
 .action.allin {
-  background: color-mix(in srgb, var(--red) 55%, transparent);
+  background: color-mix(in srgb, var(--allin) 62%, transparent);
 }
 
 .action.fold {

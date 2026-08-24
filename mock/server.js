@@ -6,10 +6,13 @@
  *   GET  /commands?mode=0&tableIndex=N       -> a table snapshot in /move body
  *                                               format, then status lines
  *   POST /checkScreenshot                    -> echoes the uploaded image back
+ *   GET  /image/N                            -> table N's screen, as a PNG
  *
  * ZigSolver API (default 8000)
  *   POST /move                               -> a /move answer, after a delay
  *                                               so cancellation is observable
+ *   POST /screenError                        -> logs the screen posted for a
+ *                                               failed call, does not store it
  *   GET  /health                             -> the health payload
  *
  * Both send CORS headers, which the real API does not — see the README.
@@ -17,6 +20,9 @@
  */
 import http from 'node:http'
 import crypto from 'node:crypto'
+// Shared with fakebot rather than copied: it is 130 lines of PNG encoder and
+// neither host wants two of them. Still no third-party dependency.
+import { tableImage } from '../fakebot/png.js'
 
 const BOT_PORT = Number(process.argv[2] || 8080)
 const API_PORT = Number(process.argv[3] || 8000)
@@ -542,6 +548,18 @@ const bot = http.createServer((req, res) => {
     })
     return
   }
+
+  // The table's screen. Table 7's body is the one the endpoint refuses, so
+  // pointing the app at it is the shortest way to watch a capture happen.
+  const image = /^\/image\/(\d+)$/.exec(url.pathname)
+  if (req.method === 'GET' && image) {
+    const png = tableImage(Number(image[1]))
+    console.log(`[bot] -> screenshot of table ${image[1]} (${png.length} bytes)`)
+    return res
+      .writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length })
+      .end(png)
+  }
+
   res.writeHead(404).end('not found')
 })
 
@@ -629,6 +647,41 @@ const apiServer = http.createServer((req, res) => {
       res
         .writeHead(200, { 'Content-Type': 'application/json' })
         .end(JSON.stringify({ requestId: body.requestId, found: !!job, killed: job ? 1 : 0 }))
+    })
+    return
+  }
+
+  // The screen behind a call that failed (api/screenerror.py). The real one
+  // writes a PNG + JSON pair under screenerrors/; this one only says how big it
+  // was, which is enough to see that the app took the picture and posted it.
+  if (req.method === 'POST' && url.pathname === '/screenError') {
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => {
+      let body = {}
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      } catch {
+        return res
+          .writeHead(400, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify({ detail: 'not JSON' }))
+      }
+      const png = Buffer.from(String(body.image || ''), 'base64')
+      const isPng = png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      const file = `${String(body.handId || 'hand').replace(/[^\w.-]+/g, '-')}-mock.png`
+      console.log(
+        `[api] screen capture: table ${body.tableIndex} hand ${body.handId} ` +
+          `${(png.length / 1024).toFixed(0)} KB${isPng ? '' : ' (NOT a PNG)'} — ${body.error}`,
+      )
+      res
+        .writeHead(png.length ? 200 : 400, { 'Content-Type': 'application/json' })
+        .end(
+          JSON.stringify(
+            png.length
+              ? { stored: true, file, bytes: png.length, png: isPng }
+              : { detail: 'no image in the request' },
+          ),
+        )
     })
     return
   }

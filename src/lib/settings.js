@@ -7,6 +7,7 @@
  */
 
 import { reactive, ref, watch } from 'vue'
+import { readStored, writeStored } from './persist'
 
 const KEY = 'zigsolver.settings'
 
@@ -62,17 +63,21 @@ const LIMITS = {
 }
 
 function load() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY) || '{}')
-    const out = { ...DEFAULTS }
-    for (const k of Object.keys(DEFAULTS)) {
-      if (raw[k] === undefined || raw[k] === null) continue
-      out[k] = typeof DEFAULTS[k] === 'boolean' ? !!raw[k] : raw[k]
+  const out = { ...DEFAULTS }
+  const raw = readStored(KEY)
+  if (!raw || typeof raw !== 'object') return out
+  for (const k of Object.keys(DEFAULTS)) {
+    if (raw[k] === undefined || raw[k] === null) continue
+    if (typeof DEFAULTS[k] === 'boolean') {
+      out[k] = !!raw[k]
+      continue
     }
-    return out
-  } catch {
-    return { ...DEFAULTS }
+    // Numeric keys are re-clamped on the way in: the limits move between
+    // builds, and a stored value outside the current ones is not a setting.
+    const n = clampNumber(k, raw[k])
+    if (n !== null) out[k] = n
   }
+  return out
 }
 
 export const settings = reactive(load())
@@ -102,17 +107,7 @@ export function resetSettings() {
   Object.assign(settings, DEFAULTS)
 }
 
-watch(
-  settings,
-  (v) => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(v))
-    } catch {
-      /* private mode: settings just do not persist */
-    }
-  },
-  { deep: true },
-)
+watch(settings, (v) => writeStored(KEY, { ...v }), { deep: true })
 
 export const BUDGET_PRESETS = [5, 10, 15, 30, 60, 120]
 export const GATE_PRESETS = [1, 2, 3, 5, 10]

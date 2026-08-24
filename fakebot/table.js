@@ -146,6 +146,11 @@ export function createTable({ index, seatCount, rng, opts, log }) {
 
   const finish = () => {
     const { winner, pot, showdown, description } = hand.settle()
+    // One last body, the way the runner puts it out: the whole history with a
+    // `Hand finished` block on the end instead of a decision. It is a snapshot by
+    // shape and a result by meaning — /move refuses a body that does not close on
+    // the hero — so it is here to prove the front end does not solve it.
+    broadcast(`${hand.render(null).trimEnd()}\n\nHand finished\n`)
     if (showdown) {
       const shown = hand.showdown
         .map((s) => `${s.name} ${s.hand} (${s.description})`)

@@ -24,6 +24,7 @@ import {
   apiUrl,
 } from '../lib/server'
 import { health } from '../lib/zigsolver'
+import { t } from '../lib/i18n'
 
 const emit = defineEmits(['close'])
 
@@ -49,25 +50,26 @@ onMounted(async () => {
 
 function placeholder(key) {
   const v = serverDefault(key, Number(settings.maxSolveTime))
-  return v === null ? 'server default' : v
+  return v === null ? t('settings.serverDefault') : v
 }
 </script>
 
 <template>
-  <InfoSheet title="Settings" subtitle="How each solve is requested" @close="emit('close')">
+  <InfoSheet
+    :title="t('settings.title')"
+    :subtitle="t('settings.subtitle')"
+    @close="emit('close')"
+  >
+    <!-- The `desc` spans are v-html throughout: the only markup in them is the
+         <code> and <b> the message files carry, and those files are part of
+         this bundle rather than anything a host or an API can reach. -->
     <section class="grp">
-      <h4>Solve</h4>
+      <h4>{{ t('settings.solveGroup') }}</h4>
 
       <div class="row col">
         <div class="lab">
-          <strong>Solve budget</strong>
-          <span class="desc">
-            <code>maxSolveTime</code> — the wall-time budget for the flop solve. The balancer
-            runs the strongest regime that fits it: full menus, then reduced menus, then
-            reduced menus with clustered turn runouts, then the net-truncated flow. Three-way
-            pots ladder the same way over the blueprint’s betting menus. More time buys a
-            better answer, not a different question.
-          </span>
+          <strong>{{ t('settings.budget') }}</strong>
+          <span class="desc" v-html="t('settings.budgetDesc')" />
         </div>
         <div class="ctl">
           <div class="presets">
@@ -95,11 +97,8 @@ function placeholder(key) {
 
       <div class="row">
         <div class="lab">
-          <strong>Solve every snapshot</strong>
-          <span class="desc">
-            Send each snapshot to the API the moment it arrives. Off, the table still draws and
-            only Re-solve or a change of regime calls the solver.
-          </span>
+          <strong>{{ t('settings.autoSolve') }}</strong>
+          <span class="desc" v-html="t('settings.autoSolveDesc')" />
         </div>
         <input
           class="switch"
@@ -111,13 +110,8 @@ function placeholder(key) {
 
       <div class="row">
         <div class="lab">
-          <strong>Cancel superseded solves</strong>
-          <span class="desc">
-            When a newer snapshot arrives, <code>POST /cancel</code> kills the one still running:
-            it SIGKILLs the solver subprocess and frees the solve semaphore, so the answer you
-            do want is not queued behind one you do not. Off, the old solve runs to completion
-            and its answer is discarded on arrival.
-          </span>
+          <strong>{{ t('settings.cancel') }}</strong>
+          <span class="desc" v-html="t('settings.cancelDesc')" />
         </div>
         <input
           class="switch"
@@ -129,13 +123,8 @@ function placeholder(key) {
 
       <div class="row">
         <div class="lab">
-          <strong>Per-hand tree cache</strong>
-          <span class="desc">
-            <code>handId</code> — keys the solved tree to this hand, so the next street and any
-            re-solve reuse it instead of solving from scratch. GTO only: an Exploit answer walks
-            the hand rather than a subgame, so there is nothing for a later street to inherit
-            and it is recomputed every time either way.
-          </span>
+          <strong>{{ t('settings.cache') }}</strong>
+          <span class="desc" v-html="t('settings.cacheDesc')" />
         </div>
         <input
           class="switch"
@@ -147,21 +136,15 @@ function placeholder(key) {
 
       <div class="row col">
         <div class="lab">
-          <strong>Stat sample size</strong>
-          <span class="desc">
-            <code>statHands</code> — how many hands the HUD stats in the snapshot cover. It
-            prices the read the Exploit regime runs on: everything the HUD does not carry is
-            imputed from the population, and a thin sample widens those imputations rather than
-            pretending to a measurement. Leave empty when you do not know — it is then read as
-            “a lot”, i.e. the read at full strength.
-          </span>
+          <strong>{{ t('settings.statHands') }}</strong>
+          <span class="desc" v-html="t('settings.statHandsDesc')" />
         </div>
         <input
           class="field num wide"
           type="number"
           min="1"
           step="50"
-          placeholder="unknown"
+          :placeholder="t('settings.statHandsPlaceholder')"
           :value="settings.statHands ?? ''"
           @change="setSetting('statHands', $event.target.value)"
         />
@@ -169,12 +152,8 @@ function placeholder(key) {
 
       <div class="row">
         <div class="lab">
-          <strong>Hold the sampled action</strong>
-          <span class="desc">
-            Keep one draw while the same spot is re-solved, so a re-solve does not also re-roll
-            the dice. Off, every answer samples fresh. GTO only — an Exploit answer is a ranking
-            by EV, not a distribution, and its top row is the move.
-          </span>
+          <strong>{{ t('settings.stableSample') }}</strong>
+          <span class="desc" v-html="t('settings.stableSampleDesc')" />
         </div>
         <input
           class="switch"
@@ -186,24 +165,13 @@ function placeholder(key) {
     </section>
 
     <section class="grp">
-      <h4>Flop solve quality</h4>
-      <p class="note">
-        The three numbers the flop regime ladder runs on. Leave a field empty to use the
-        API’s own default (shown greyed). Flop only — turn and river are always solved as
-        their own street at the widest sizing grid.
-      </p>
+      <h4>{{ t('settings.qualityGroup') }}</h4>
+      <p class="note">{{ t('settings.qualityNote') }}</p>
 
       <div class="row col">
         <div class="lab">
-          <strong>Solve exactly when it beats</strong>
-          <span class="desc">
-            <code>gateExploitability</code> — % of pot. Before choosing, the balancer predicts
-            how exploitable each regime’s solve would be at the iterations your budget buys,
-            and takes the strongest one at or under this. The net-truncated flow it falls back
-            to measures 5.6–12% itself, so anything below that is a real preference for an
-            exact solve. Lower is stricter: fewer spots qualify and more drop to the net.
-            <strong>0</strong> never solves exactly.
-          </span>
+          <strong>{{ t('settings.gate') }}</strong>
+          <span class="desc" v-html="t('settings.gateDesc')" />
         </div>
         <div class="ctl">
           <div class="presets">
@@ -232,12 +200,8 @@ function placeholder(key) {
 
       <div class="row col">
         <div class="lab">
-          <strong>Stop at</strong>
-          <span class="desc">
-            <code>targetExploitability</code> — % of pot. The solve runs its own best-response
-            check as it goes and stops once it reaches this. Lower keeps it iterating longer
-            for a sharper answer; the budget still ends it either way.
-          </span>
+          <strong>{{ t('settings.target') }}</strong>
+          <span class="desc" v-html="t('settings.targetDesc')" />
         </div>
         <input
           class="field num wide"
@@ -253,13 +217,8 @@ function placeholder(key) {
 
       <div class="row col">
         <div class="lab">
-          <strong>Minimum solve time</strong>
-          <span class="desc">
-            <code>minSolveTime</code> — seconds. A floor under the stop above: a flop that
-            reaches the target in two seconds keeps improving until this much time is spent,
-            which is most of what the budget buys on an easy board. It never runs past the
-            solve budget — a value above it is clamped, and the answer says so.
-          </span>
+          <strong>{{ t('settings.minTime') }}</strong>
+          <span class="desc" v-html="t('settings.minTimeDesc')" />
         </div>
         <input
           class="field num wide"
@@ -275,12 +234,12 @@ function placeholder(key) {
     </section>
 
     <section class="grp">
-      <h4>Endpoints</h4>
+      <h4>{{ t('settings.endpointsGroup') }}</h4>
 
       <div class="row col">
         <div class="lab">
-          <strong>Bot host</strong>
-          <span class="desc">The runner’s WebSocket, and the screenshot check upload.</span>
+          <strong>{{ t('settings.botHost') }}</strong>
+          <span class="desc">{{ t('settings.botHostDesc') }}</span>
         </div>
         <input
           class="field"
@@ -296,8 +255,8 @@ function placeholder(key) {
 
       <div class="row col">
         <div class="lab">
-          <strong>ZigSolver API</strong>
-          <span class="desc">Where snapshots are POSTed. Changing it applies to the next solve.</span>
+          <strong>{{ t('settings.api') }}</strong>
+          <span class="desc">{{ t('settings.apiDesc') }}</span>
         </div>
         <input
           class="field"
@@ -314,7 +273,7 @@ function placeholder(key) {
 
     <div class="foot">
       <button class="btn btn-sm" :disabled="!dirty" @click="resetSettings">
-        Reset solve settings
+        {{ t('settings.reset') }}
       </button>
     </div>
   </InfoSheet>
@@ -372,7 +331,9 @@ h4 {
   line-height: 1.5;
 }
 
-code {
+/* :deep, because the descriptions arrive through v-html and their <code> tags
+   carry no scope attribute. */
+.desc :deep(code) {
   font-family: var(--font-mono);
   font-size: 0.92em;
   padding: 0 4px;

@@ -51,7 +51,7 @@ export const ACTION_TONE = {
   call: 'var(--green)',
   bet: 'var(--orange)',
   raise: 'var(--pink)',
-  'all-in': 'var(--red)',
+  'all-in': 'var(--allin)',
   other: 'var(--purple)',
 }
 
@@ -138,8 +138,16 @@ export function buildAnswer(payload, request = {}) {
 /**
  * A refused or unreachable call. `hint` is the actionable half — a 400 from the
  * endpoint explains itself, a network failure does not.
+ *
+ * Both may be a plain string (what the endpoint said, in its own words) or a
+ * `{ key, params }` pair for one of ours. The panel renders either — an error
+ * stays on screen until the next solve, so ours has to be able to change
+ * language under it rather than be frozen at the moment it happened.
  */
-export function buildError(message, { payload = null, hint = null, request = {} } = {}) {
+export function buildError(
+  message,
+  { payload = null, hint = null, request = {}, status = null } = {},
+) {
   return {
     id: nextId++,
     receivedAt: Date.now(),
@@ -148,6 +156,10 @@ export function buildError(message, { payload = null, hint = null, request = {} 
     hint,
     payload,
     request,
+    // The HTTP status, or null when the call never reached the endpoint. Not
+    // rendered — it goes into the screen capture's record (lib/screenError.js),
+    // where "refused with 400" and "never arrived" are different bugs.
+    status,
   }
 }
 

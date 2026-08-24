@@ -30,6 +30,9 @@
     --purple: #af52de;
     --teal: #30b0c7;
     --pink: #ff2d55;
+    /* All-in. A blue-leaning violet, not the magenta --purple, so it never
+       reads as a shade of --red / --pink next to the other action tones. */
+    --allin: #7c3aed;
 }
 
 /* Light */
@@ -102,6 +105,7 @@
     --purple: #bf5af2;
     --teal: #40c8e0;
     --pink: #ff375f;
+    --allin: #a97cff;
     --felt-1: #146543;
     --felt-2: #06301f;
     --card-face: #f7f7f9;

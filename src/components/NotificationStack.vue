@@ -1,5 +1,6 @@
 <script setup>
 import { notifications, dismiss } from '../lib/notify'
+import { t } from '../lib/i18n'
 </script>
 
 <template>
@@ -13,7 +14,7 @@ import { notifications, dismiss } from '../lib/notify'
         :key="n.id"
         class="notif"
         :class="n.tone"
-        title="Dismiss"
+        :title="t('common.dismiss')"
         @click="dismiss(n.id)"
       >
         <span class="dot" />

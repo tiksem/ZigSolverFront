@@ -64,10 +64,43 @@ export function readFrames(buf) {
 }
 
 /**
+ * What a host with `--encrypt` puts on the wire: AES-256-CBC under the shared
+ * key, base64'd — the Kotlin side's `AES/CBC/PKCS5PADDING` with a fixed IV.
+ * The app sniffs each frame rather than being told, so this is here to prove
+ * the sniffing works against real ciphertext.
+ */
+const HASH_SECRET = 'u3sZ7Kp1mQ8vT4xN6cR2aW9jF5yH0bLd'
+const HASH_IV = 'G7mQ2vX9pL4sK8dN'
+
+function cipher() {
+  return crypto.createCipheriv('aes-256-cbc', Buffer.from(HASH_SECRET), Buffer.from(HASH_IV))
+}
+
+function seal(text) {
+  const c = cipher()
+  return Buffer.concat([c.update(text, 'utf8'), c.final()]).toString('base64')
+}
+
+/**
+ * The same wrapper over bytes, for `GET /image/{tableIndex}`.
+ *
+ * Base64, like the socket, because that is the shape the app was written
+ * against — though `decryptImage` accepts raw ciphertext too, since a host
+ * answering with an image body has no reason to text-encode it.
+ */
+export function sealBytes(buf) {
+  const c = cipher()
+  return Buffer.from(
+    Buffer.concat([c.update(buf), c.final()]).toString('base64'),
+    'ascii',
+  )
+}
+
+/**
  * Complete the upgrade and wire the callbacks up. Returns `send(text)`, which
  * is a no-op once the socket is gone.
  */
-export function serveSocket(req, socket, { onMessage, onClose }) {
+export function serveSocket(req, socket, { onMessage, onClose, encrypt = false }) {
   socket.write(
     'HTTP/1.1 101 Switching Protocols\r\n' +
       'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
@@ -100,6 +133,6 @@ export function serveSocket(req, socket, { onMessage, onClose }) {
 
   return (text) => {
     if (closed || !socket.writable) return
-    socket.write(frame(text))
+    socket.write(frame(encrypt ? seal(text) : text))
   }
 }

@@ -8,30 +8,88 @@
  * answered decides what the numbers mean: a GTO answer is a distribution to mix
  * at, an exploit answer is a ranking by EV whose top row IS the move.
  */
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import PlayingCard from './PlayingCard.vue'
 import HelpButton from './HelpButton.vue'
 import InfoSheet from './InfoSheet.vue'
-import { describeSolver, describeFlow, DECISION_LABELS } from '../lib/solvers'
+import { describeSolver, describeFlow, decisionLabel } from '../lib/solvers'
 import { REGIME_BY_VALUE } from '../lib/regime'
 import { ACTION_TONE, pct } from '../lib/moveResult'
+import { t, tp, tv, tk } from '../lib/i18n'
 
 const props = defineProps({
   result: { type: Object, default: null },
   pending: { type: Boolean, default: false },
+  /** `performance.now()` when the solve in flight went out, or null. */
+  startedAt: { type: Number, default: null },
   /** The regime currently selected: 'gto' | 'exploit' | 'manual'. */
   regime: { type: String, default: 'gto' },
 })
 
 const solverHelp = ref(false)
+// Both of these open a sheet OVER the answer, and neither is persisted: a modal
+// restored open on load covers a panel that has no result behind it yet.
 const details = ref(false)
 
 const solver = computed(() => describeSolver(props.result?.solver))
 const meta = computed(() => props.result?.meta || {})
 const answer = computed(() => (props.result?.type === 'answer' ? props.result : null))
 
+/**
+ * The stopwatch, running while a solve is out.
+ *
+ * An interval rather than a rAF loop: the digit that moves is a tenth of a
+ * second, and rAF stops dead in a backgrounded tab — which is exactly where a
+ * long solve is watched from — while an interval keeps counting (throttled).
+ */
+const ticking = ref(0)
+let ticker = null
+
+function stopTicker() {
+  if (ticker !== null) {
+    clearInterval(ticker)
+    ticker = null
+  }
+}
+
+watch(
+  () => props.startedAt,
+  (at) => {
+    stopTicker()
+    if (at == null) return
+    ticking.value = 0
+    ticker = setInterval(() => {
+      ticking.value = (performance.now() - at) / 1000
+    }, 100)
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(stopTicker)
+
+/**
+ * The same clock, stopped: what the browser waited for THIS answer.
+ *
+ * Worth having next to the endpoint's own `responseTime` — that one is measured
+ * inside the API and knows nothing about the queue, the transport or the
+ * coalescing in front of it, so a gap between the two is where the wait went.
+ */
+const measured = computed(() =>
+  typeof props.result?.clientSeconds === 'number' ? props.result.clientSeconds : null,
+)
+
+/** Measured minus what the API charged itself — everything that is not solving. */
+const overhead = computed(() => {
+  const reported = Number(props.result?.responseTime)
+  if (measured.value === null || !Number.isFinite(reported)) return null
+  return measured.value - reported
+})
+
 /** The regime that ACTUALLY ran, which is what the numbers below mean. */
-const served = computed(() => REGIME_BY_VALUE[answer.value?.regime || 'gto'])
+const served = computed(() => {
+  const value = answer.value?.regime || 'gto'
+  return REGIME_BY_VALUE[value] ? t(`regime.${value}.title`) : value
+})
 const isExploit = computed(() => answer.value?.regime === 'exploit')
 
 /**
@@ -50,7 +108,14 @@ const heroCards = computed(() => {
 /** What was asked for, in the picker's own words. */
 const askedLabel = computed(() => {
   const asked = answer.value?.regimeRequested || props.result?.request?.regime || props.regime
-  return REGIME_BY_VALUE[asked]?.title || asked
+  return REGIME_BY_VALUE[asked] ? t(`regime.${asked}.title`) : asked
+})
+
+/** The header's street word — 'decision' when the answer carries no street. */
+const streetLabel = computed(() => {
+  const s = props.result?.street
+  if (!s) return t('street.decision')
+  return tv(`street.${s}`, String(s).replace(/^./, (c) => c.toUpperCase()))
 })
 
 /** One row per action. The columns differ by regime; the shape does not. */
@@ -96,61 +161,91 @@ const seatsLabel = computed(() => {
     .join('  ·  ')
 })
 
-/** The full account of the solve — behind the Details button. */
+/**
+ * The full account of the solve — behind the Details button.
+ *
+ * The LABELS are translated; the values are left exactly as the API reported
+ * them. This is a diagnostic dump read next to the endpoint's own logs, and a
+ * translated `flow` or `solver` name would not be greppable against either.
+ */
 const facts = computed(() => {
   const m = meta.value
   const out = []
-  const push = (label, value) => {
-    if (value !== null && value !== undefined && value !== '') out.push({ label, value })
+  const push = (key, value) => {
+    if (value !== null && value !== undefined && value !== '') {
+      out.push({ key, label: t(`facts.${key}`), value })
+    }
   }
-  push('Regime', props.result?.regime)
-  push('Requested', answer.value?.regimeRequested)
-  push('Solver', props.result?.solver)
-  push('Flow', m.flow)
-  push('Street', props.result?.street)
-  push('Hand', props.result?.hand)
-  push('Pot', m.potBB != null ? `${num(m.potBB)} BB` : null)
-  push('To call', m.toCallBB != null ? `${num(m.toCallBB)} BB` : null)
-  push('Seats', seatsLabel.value)
-  push('Acting seat', m.actingSeat != null ? String(m.actingSeat) : null)
-  push('Board', Array.isArray(m.board) ? m.board.join(' ') : m.board)
-  push('Solve time', m.solveSeconds != null ? `${num(m.solveSeconds, 3)} s` : null)
-  push('Predicted', m.predictedSolveSeconds != null ? `${num(m.predictedSolveSeconds, 3)} s` : null)
-  push('Response time', props.result?.responseTime != null ? `${props.result.responseTime} s` : null)
-  push('Cached', m.cached === null || m.cached === undefined ? null : String(m.cached))
-  push('Rooted at', m.rootedAt)
-  push('Entry ranges', m.entrySource)
-  push('Players', m.players)
-  push('Iterations', m.iterations != null ? Number(m.iterations).toLocaleString() : null)
-  push('Infosets', m.infosets != null ? Number(m.infosets).toLocaleString() : null)
-  push('Iters / infoset', m.itersPerInfoset)
-  push('Depth limit', m.depthLimit)
-  push('Thinned from', m.thinnedFrom ? `${m.thinnedFrom}-way at the ${m.thinnedAt}` : null)
-  push('Narrowed on', m.narrowRegime)
-  push('Narrow time', m.narrowSeconds != null ? `${num(m.narrowSeconds, 3)} s` : null)
+  push('regime', props.result?.regime)
+  push('requested', answer.value?.regimeRequested)
+  push('solver', props.result?.solver)
+  push('flow', m.flow)
+  push('street', props.result?.street)
+  push('hand', props.result?.hand)
+  push('pot', m.potBB != null ? `${num(m.potBB)} BB` : null)
+  push('toCall', m.toCallBB != null ? `${num(m.toCallBB)} BB` : null)
+  push('seats', seatsLabel.value)
+  push('actingSeat', m.actingSeat != null ? String(m.actingSeat) : null)
+  push('board', Array.isArray(m.board) ? m.board.join(' ') : m.board)
+  push('solveTime', m.solveSeconds != null ? `${num(m.solveSeconds, 3)} s` : null)
+  push('predicted', m.predictedSolveSeconds != null ? `${num(m.predictedSolveSeconds, 3)} s` : null)
+  push('responseTime', props.result?.responseTime != null ? `${props.result.responseTime} s` : null)
+  push('measured', measured.value != null ? `${num(measured.value, 3)} s` : null)
+  push('overhead', overhead.value != null ? `${num(overhead.value, 3)} s` : null)
+  push('cached', m.cached === null || m.cached === undefined ? null : String(m.cached))
+  push('rootedAt', m.rootedAt)
+  push('entryRanges', m.entrySource)
+  push('players', m.players)
+  push('iterations', m.iterations != null ? Number(m.iterations).toLocaleString() : null)
+  push('infosets', m.infosets != null ? Number(m.infosets).toLocaleString() : null)
+  push('itersPerInfoset', m.itersPerInfoset)
+  push('depthLimit', m.depthLimit)
+  push(
+    'thinnedFrom',
+    m.thinnedFrom
+      ? t('facts.thinnedValue', {
+          n: m.thinnedFrom,
+          street: tv(`street.${m.thinnedAt}`, m.thinnedAt),
+        })
+      : null,
+  )
+  push('narrowedOn', m.narrowRegime)
+  push('narrowTime', m.narrowSeconds != null ? `${num(m.narrowSeconds, 3)} s` : null)
   // Exploit-only: how the search was shaped, and what it was reading.
-  push('Runouts', m.chance ? JSON.stringify(m.chance) : null)
-  push('Leaf', m.leaf)
-  push('Card removal', m.removal)
-  push('Bet menu', Array.isArray(m.menuBets) ? m.menuBets.join(' / ') + '%' : null)
-  push('Raise menu', Array.isArray(m.menuRaises) ? m.menuRaises.join(' / ') + '%' : null)
-  push('Nodes', m.nodes != null ? Number(m.nodes).toLocaleString() : null)
-  push('Model calls', m.predicts)
-  push('Villain stats read', Array.isArray(m.villainStats) ? m.villainStats.join(', ') : null)
-  push('Over hands', m.villainStatHands != null ? Number(m.villainStatHands).toLocaleString() : null)
-  push('Hand class', m.handClass)
-  push('Effective stack', m.effectiveBB != null ? `${num(m.effectiveBB)} BB` : null)
-  push('Raises before', m.raisesBefore)
-  push('Callers before', m.callersBefore)
-  push('Aggressor', m.aggressor)
-  push('Node', m.node)
-  push('Budget sent', props.result?.request?.maxSolveTime ? `${props.result.request.maxSolveTime} s` : null)
+  push('runouts', m.chance ? JSON.stringify(m.chance) : null)
+  push('leaf', m.leaf)
+  push('cardRemoval', m.removal)
+  push('betMenu', Array.isArray(m.menuBets) ? m.menuBets.join(' / ') + '%' : null)
+  push('raiseMenu', Array.isArray(m.menuRaises) ? m.menuRaises.join(' / ') + '%' : null)
+  push('nodes', m.nodes != null ? Number(m.nodes).toLocaleString() : null)
+  push('modelCalls', m.predicts)
+  push('villainStats', Array.isArray(m.villainStats) ? m.villainStats.join(', ') : null)
+  push('overHands', m.villainStatHands != null ? Number(m.villainStatHands).toLocaleString() : null)
+  push('handClass', m.handClass)
+  push('effectiveStack', m.effectiveBB != null ? `${num(m.effectiveBB)} BB` : null)
+  push('raisesBefore', m.raisesBefore)
+  push('callersBefore', m.callersBefore)
+  push('aggressor', m.aggressor)
+  push('node', m.node)
+  push(
+    'budgetSent',
+    props.result?.request?.maxSolveTime ? `${props.result.request.maxSolveTime} s` : null,
+  )
   push('handId', props.result?.request?.handId)
   return out
 })
 
 const warnings = computed(() => props.result?.warnings || [])
 const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label-3)')
+
+/**
+ * An error's message and hint. Either may be a string the endpoint sent, which
+ * is shown verbatim, or one of our own `{ key, params }` pairs, which is worded
+ * here so it follows the language rather than the moment it failed.
+ */
+const say = (v) => (typeof v === 'string' ? v : tk(v))
+const errorMessage = computed(() => say(props.result?.message))
+const errorHint = computed(() => say(props.result?.hint))
 </script>
 
 <template>
@@ -161,30 +256,39 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
         <span class="street">
           {{
             result?.type === 'answer'
-              ? (result.street || 'decision').replace(/^./, (c) => c.toUpperCase())
+              ? streetLabel
               : result?.type === 'error'
-                ? 'Rejected'
-                : 'Waiting'
+                ? t('panel.rejected')
+                : t('panel.waiting')
           }}
         </span>
         <template v-if="answer">
           <span class="sep">·</span>
           <span class="chip read" :class="{ exploit: isExploit, fell: fellBack }">
-            {{ served.title }}<i v-if="fellBack">asked {{ askedLabel }}</i>
+            {{ served }}<i v-if="fellBack">{{ t('panel.asked', { regime: askedLabel }) }}</i>
           </span>
           <button class="badge" :class="solver.tone" @click="solverHelp = true">
             {{ solver.title }}
           </button>
-          <HelpButton :size="16" label="How this was solved" @click="solverHelp = true" />
-          <span v-if="result.responseTime != null" class="secs mono">
-            {{ result.responseTime }}s
-          </span>
+          <HelpButton :size="16" :label="t('panel.howSolved')" @click="solverHelp = true" />
         </template>
+
+        <!-- The wait, measured here: ticking while the answer is out, then
+             frozen next to the seconds the API charged itself. -->
+        <span v-if="measured != null && !pending" class="secs mono" :title="t('panel.timingTitle')">
+          {{ t('panel.wallShort') }} {{ measured.toFixed(2) }}s<i v-if="result.responseTime != null">
+            · {{ t('panel.apiShort') }} {{ result.responseTime }}s</i>
+        </span>
       </div>
 
       <div class="right">
-        <span v-if="pending" class="busy"><span class="spinner" />solving</span>
-        <button v-if="answer" class="btn btn-sm" @click="details = true">Details</button>
+        <span v-if="pending" class="busy">
+          <span class="spinner" />{{ t('panel.solving') }}
+          <span v-if="startedAt != null" class="mono clock">{{ ticking.toFixed(1) }}s</span>
+        </span>
+        <button v-if="answer" class="btn btn-sm" @click="details = true">
+          {{ t('common.details') }}
+        </button>
         <div v-if="heroCards.length" class="hcards">
           <PlayingCard v-for="c in heroCards" :key="c" :card="c" size="sm" />
         </div>
@@ -195,7 +299,7 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
       <!-- what to play -------------------------------------------------- -->
       <div class="picks">
         <div class="pick" :style="{ '--tone': tone(answer.sampled) }">
-          <span class="plabel">{{ isExploit ? 'Play (max EV)' : 'Play (GTO)' }}</span>
+          <span class="plabel">{{ isExploit ? t('panel.playMaxEv') : t('panel.playGto') }}</span>
           <span class="pval">{{ answer.sampled?.action || '—' }}</span>
         </div>
       </div>
@@ -204,13 +308,13 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
       <table class="freq">
         <thead>
           <tr>
-            <th class="a">Action</th>
+            <th class="a">{{ t('panel.colAction') }}</th>
             <template v-if="isExploit">
-              <th class="n">EV (BB)</th>
-              <th class="n">% pot</th>
-              <th class="n d">Support</th>
+              <th class="n">{{ t('panel.colEv') }}</th>
+              <th class="n">{{ t('panel.colPctPot') }}</th>
+              <th class="n d">{{ t('panel.colSupport') }}</th>
             </template>
-            <th v-else class="n">Frequency</th>
+            <th v-else class="n">{{ t('panel.colFrequency') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -222,9 +326,7 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
             <td class="a">
               <span class="swatch" :style="{ background: r.color }" />
               <span class="akey">{{ r.action }}</span>
-              <span v-if="r.decision" class="dec">{{
-                DECISION_LABELS[r.decision] || r.decision
-              }}</span>
+              <span v-if="r.decision" class="dec">{{ decisionLabel(r.decision) }}</span>
             </td>
             <template v-if="isExploit">
               <td class="n tnum strong">{{ num(r.evBB, 2) }}</td>
@@ -242,49 +344,46 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
 
       <!-- the regime, in one line ----------------------------------------- -->
       <div class="readline">
-        <strong>{{ served.title }}</strong>
+        <strong>{{ served }}</strong>
         <span class="blurb">
           {{
             isExploit
-              ? `Maximum EV against this villain’s measured behaviour. The top row is the move — there is nothing to mix at, and every EV is counted from this decision on.`
+              ? t('panel.blurbExploit')
               : result.street === 'preflop'
-                ? 'A chart, already bent by the opponents’ stats — mix at these frequencies.'
-                : 'The equilibrium strategy at this node — mix at these frequencies.'
+                ? t('panel.blurbPreflop')
+                : t('panel.blurbGto')
           }}
         </span>
       </div>
 
       <p v-if="fellBack" class="fellback">
-        <strong>{{ askedLabel }} was asked for and could not be answered here</strong> — this is
-        the GTO answer instead.
-        <button class="linky" @click="details = true">Why</button>
+        <!-- v-html: the <b> is the message file's own, and the file is ours. -->
+        <span v-html="t('panel.fellBack', { regime: askedLabel })" />
+        <button class="linky" @click="details = true">{{ t('panel.why') }}</button>
       </p>
 
-      <p v-if="thinBest" class="fellback">
-        The recommended size has thin population support — the models are extrapolating there.
-      </p>
+      <p v-if="thinBest" class="fellback">{{ t('panel.thinSupport') }}</p>
 
       <p v-if="warnings.length" class="warncount">
-        {{ warnings.length }} warning{{ warnings.length > 1 ? 's' : '' }} —
-        <button class="linky" @click="details = true">see details</button>
+        {{ tp('panel.warningCount', warnings.length) }}
+        <button class="linky" @click="details = true">{{ t('panel.seeDetails') }}</button>
       </p>
     </template>
 
     <template v-else-if="result?.type === 'error'">
       <div class="error">
-        <p class="emsg">{{ result.message }}</p>
-        <p v-if="result.hint" class="ehint">{{ result.hint }}</p>
+        <p class="emsg">{{ errorMessage }}</p>
+        <p v-if="errorHint" class="ehint">{{ errorHint }}</p>
       </div>
     </template>
 
     <div v-else class="idlebox">
       <div v-if="pending" class="spinner" />
       <span class="muted">
-        {{
-          pending
-            ? 'Solving…'
-            : 'Each snapshot is sent to the ZigSolver API, and its answer lands here.'
-        }}
+        {{ pending ? t('panel.solvingEllipsis') : t('panel.idle') }}
+      </span>
+      <span v-if="pending && startedAt != null" class="mono clock">
+        {{ ticking.toFixed(1) }}s
       </span>
     </div>
 
@@ -292,53 +391,42 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
     <InfoSheet
       v-if="solverHelp"
       :title="solver.title"
-      :subtitle="`solver: ${solver.name}`"
+      :subtitle="t('panel.solverSubtitle', { name: solver.name })"
       @close="solverHelp = false"
     >
       <p class="para"><strong>{{ solver.summary }}</strong></p>
       <p class="para pre">{{ solver.detail }}</p>
       <template v-if="meta.flow">
-        <h4>Flow: {{ meta.flow }}</h4>
+        <h4>{{ t('panel.flowHeading', { flow: meta.flow }) }}</h4>
         <p class="para">{{ describeFlow(meta.flow) }}</p>
       </template>
-      <h4>Reading the numbers</h4>
-      <p class="para">
-        In the <strong>GTO</strong> regime the column is a distribution: mix at those
-        frequencies, and <strong>Play</strong> is one random draw from it. In the
-        <strong>Exploit</strong> regime there is nothing to mix — the rows are ranked by EV
-        against the modelled opponent and the top one is the move.
-      </p>
-      <p class="para">
-        <strong>EV (BB)</strong> counts from this decision on: chips already in the pot are sunk,
-        so folding is 0 by construction and every other number is read against it.
-        <strong>% pot</strong> is the same number over the pot at the node.
-        <strong>Support</strong> is the share of real play the size models saw at that size — a
-        winning branch under about 2% is one the models are extrapolating on, which the warnings
-        also say.
-      </p>
+      <h4>{{ t('panel.numbersHeading') }}</h4>
+      <!-- v-html: the <b> markup belongs to the message files. -->
+      <p class="para" v-html="t('panel.numbersMix')" />
+      <p class="para" v-html="t('panel.numbersEv')" />
     </InfoSheet>
 
     <InfoSheet
       v-if="details"
-      title="How it was solved"
+      :title="t('panel.detailsTitle')"
       :subtitle="`${result?.solver || ''}`"
       @close="details = false"
     >
       <div class="grid">
-        <div v-for="f in facts" :key="f.label" class="fact">
+        <div v-for="f in facts" :key="f.key" class="fact">
           <span class="fl">{{ f.label }}</span>
           <span class="fv">{{ f.value }}</span>
         </div>
       </div>
 
       <template v-if="warnings.length">
-        <h4>Warnings</h4>
+        <h4>{{ t('common.warningsHeading') }}</h4>
         <ul class="warnings">
           <li v-for="(w, i) in warnings" :key="i">{{ w }}</li>
         </ul>
       </template>
 
-      <h4>Raw response</h4>
+      <h4>{{ t('common.rawHeading') }}</h4>
       <pre class="raw mono">{{ JSON.stringify(result?.payload, null, 2) }}</pre>
     </InfoSheet>
   </div>
@@ -433,8 +521,23 @@ const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label
 }
 
 .secs {
-  color: var(--label-3);
+  color: var(--label-2);
   font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The API's own number, second: ours is the one being reported. */
+.secs i {
+  font-style: normal;
+  color: var(--label-3);
+}
+
+/* Tabular figures, or the seconds shift the label every tenth of a second. */
+.clock {
+  color: var(--blue);
+  font-size: 11.5px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
 }
 
 .right {

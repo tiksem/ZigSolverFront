@@ -22,6 +22,7 @@ import { notify } from '../lib/notify'
 import { useSocket } from '../lib/useSocket'
 import { health } from '../lib/zigsolver'
 import { noteServerInfo } from '../lib/settings'
+import { t } from '../lib/i18n'
 import {
   INDEXES_TABLE_INDEX,
   MODE_HAND,
@@ -43,7 +44,14 @@ const connected = ref(false)
 const tables = ref([])
 const activity = ref([])
 
-/** null | {state:'checking'|'ok'|'fail', text, hint} */
+/**
+ * The /health probe's verdict — null, or `{ state, info?, url? }`.
+ *
+ * Deliberately NOT the sentence it renders as: the probe runs once and its
+ * answer sits here until the next Connect, so a language change afterwards has
+ * to be able to re-word it. The state holds the FACTS and `apiText` /
+ * `apiHint` build the line from them at render time.
+ */
 const apiState = ref(null)
 const showSettings = ref(false)
 
@@ -79,29 +87,38 @@ function handleMessage(text) {
 async function probeApi() {
   const url = apiUrl('/health')
   if (!url) return
-  apiState.value = { state: 'checking', text: 'Checking…' }
+  apiState.value = { state: 'checking' }
   try {
     const info = await health(url)
     // The API's own flop-tuning defaults, for the settings sheet's placeholders.
     noteServerInfo(info)
-    const bits = [
-      info.status,
-      info.libVersion ? `lib ${info.libVersion}` : null,
-      info.netEnabled ? `turn net on (${info.netDevice})` : 'turn net off',
-      info.flopSolveDevice ? `flop ${info.flopSolveDevice}` : null,
-    ].filter(Boolean)
-    apiState.value = { state: 'ok', text: bits.join(' · ') }
+    apiState.value = { state: 'ok', info }
   } catch (e) {
-    apiState.value = {
-      state: 'fail',
-      text: `Could not reach ${url}`,
-      hint:
-        'The API is either not running there, or running without CORS headers — ' +
-        'a browser refuses a cross-origin response that has none. Add ' +
-        'CORSMiddleware to api/server.py, or serve this app from the API’s origin.',
-    }
+    apiState.value = { state: 'fail', url }
   }
 }
+
+/** What the probe's verdict says, in the language selected right now. */
+const apiText = computed(() => {
+  const s = apiState.value
+  if (!s) return ''
+  if (s.state === 'checking') return t('connect.checking')
+  if (s.state === 'fail') return t('connect.unreachable', { url: s.url })
+  const info = s.info
+  return [
+    info.status,
+    info.libVersion ? t('connect.libVersion', { version: info.libVersion }) : null,
+    info.netEnabled ? t('connect.turnNetOn', { device: info.netDevice }) : t('connect.turnNetOff'),
+    info.flopSolveDevice ? t('connect.flopDevice', { device: info.flopSolveDevice }) : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+})
+
+/** The actionable half, and only the failure has one. */
+const apiHint = computed(() =>
+  apiState.value?.state === 'fail' ? t('connect.unreachableHint') : null,
+)
 
 function connect() {
   if (!canConnect.value) return
@@ -141,9 +158,12 @@ function openTable(index) {
 
 <template>
   <div class="wrap">
-    <AppNav title="ZigSolver" :subtitle="connected ? displayHost() : 'Not connected'">
+    <AppNav
+      :title="t('connect.title')"
+      :subtitle="connected ? displayHost() : t('connect.notConnected')"
+    >
       <StatusDot v-if="connected" :status="sock.status.value" />
-      <button class="gear" title="Settings" @click="showSettings = true">
+      <button class="gear" :title="t('nav.settings')" @click="showSettings = true">
         <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
           <circle cx="10" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7" />
           <path
@@ -159,17 +179,14 @@ function openTable(index) {
 
     <div class="page">
       <section class="hero">
-        <h1>Tables</h1>
-        <p class="lede">
-          Connect to a running bot host to list its tables. Each table’s snapshots are sent
-          straight to the ZigSolver API, and its answer is what you read.
-        </p>
+        <h1>{{ t('connect.heading') }}</h1>
+        <p class="lede">{{ t('connect.lede') }}</p>
       </section>
 
       <form class="connect card" @submit.prevent="connect">
         <div class="fields">
           <div class="field-block">
-            <label class="eyebrow" for="host">Bot host</label>
+            <label class="eyebrow" for="host">{{ t('connect.botHost') }}</label>
             <input
               id="host"
               v-model="hostDraft"
@@ -186,7 +203,7 @@ function openTable(index) {
           </div>
 
           <div class="field-block">
-            <label class="eyebrow" for="api">ZigSolver API</label>
+            <label class="eyebrow" for="api">{{ t('connect.api') }}</label>
             <input
               id="api"
               v-model="apiDraft"
@@ -205,13 +222,13 @@ function openTable(index) {
 
         <div class="actions">
           <button v-if="!connected" class="btn btn-primary" type="submit" :disabled="!canConnect">
-            Connect
+            {{ t('connect.connect') }}
           </button>
           <button v-else class="btn btn-danger" type="button" @click="disconnect">
-            Disconnect
+            {{ t('connect.disconnect') }}
           </button>
           <span v-if="!canConnect && (hostDraft || apiDraft)" class="muted small">
-            Both hosts are required.
+            {{ t('connect.bothRequired') }}
           </span>
         </div>
 
@@ -239,18 +256,18 @@ function openTable(index) {
             <span v-else class="spinner tiny" />
           </span>
           <span class="atext">
-            <strong>ZigSolver: {{ apiState.text }}</strong>
-            <span v-if="apiState.hint" class="ahint">{{ apiState.hint }}</span>
+            <strong>{{ t('connect.apiLine', { text: apiText }) }}</strong>
+            <span v-if="apiHint" class="ahint">{{ apiHint }}</span>
           </span>
           <button v-if="apiState.state === 'fail'" class="btn btn-sm" type="button" @click="probeApi">
-            Retry
+            {{ t('common.retry') }}
           </button>
         </div>
       </form>
 
       <section v-if="connected" class="results">
         <div class="sechead">
-          <h2>Running tables</h2>
+          <h2>{{ t('connect.runningTables') }}</h2>
           <span v-if="tables.length" class="chip">{{ tables.length }}</span>
           <div class="spacer" />
           <StatusDot :status="sock.status.value" />
@@ -264,7 +281,7 @@ function openTable(index) {
             @click="openTable(index)"
           >
             <span class="tile-index">{{ index }}</span>
-            <span class="tile-name">Table {{ index }}</span>
+            <span class="tile-name">{{ t('connect.table', { index }) }}</span>
             <span class="tile-go">
               <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
                 <path
@@ -282,29 +299,28 @@ function openTable(index) {
 
         <div v-else class="empty card">
           <div class="spinner" />
-          <p v-if="sock.status.value === 'open'">
-            Connected — waiting for the <code>Indexes:</code> broadcast.
-          </p>
-          <p v-else>Reaching {{ displayHost() }}…</p>
+          <!-- v-html: the <code> is the message file's own. -->
+          <p v-if="sock.status.value === 'open'" v-html="t('connect.waitingBroadcast')" />
+          <p v-else>{{ t('connect.reaching', { host: displayHost() }) }}</p>
         </div>
 
         <div class="allbots">
           <button class="btn" :disabled="sock.status.value !== 'open'" @click="sock.send('allbot')">
-            Toggle all bots
+            {{ t('connect.toggleAllBots') }}
           </button>
           <button
             class="btn"
             :disabled="sock.status.value !== 'open'"
             @click="sock.send('autoenablebot')"
           >
-            Auto-enable bots
+            {{ t('connect.autoEnableBots') }}
           </button>
         </div>
 
       </section>
 
       <section v-else class="placeholder">
-        <p class="muted">Enter both hosts above to see the tables the bot is running.</p>
+        <p class="muted">{{ t('connect.placeholder') }}</p>
       </section>
 
       <RouterLink class="checklink card" to="/check">
@@ -331,8 +347,8 @@ function openTable(index) {
           </svg>
         </span>
         <span class="cl">
-          <strong>Screenshot check</strong>
-          <span class="muted">Run a screenshot through the extractor, or crop a region.</span>
+          <strong>{{ t('connect.checkLink') }}</strong>
+          <span class="muted">{{ t('connect.checkLinkSub') }}</span>
         </span>
         <svg class="cx" viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
           <path
@@ -347,7 +363,7 @@ function openTable(index) {
       </RouterLink>
     </div>
 
-    <MessageDock :messages="activity" title="Host messages" @clear="activity = []" />
+    <MessageDock :messages="activity" :title="t('connect.hostMessages')" @clear="activity = []" />
 
     <SettingsSheet v-if="showSettings" @close="showSettings = false" />
   </div>
@@ -389,7 +405,8 @@ function openTable(index) {
   font-size: 12.5px;
 }
 
-code {
+/* :deep, because the one <code> left on this screen arrives through v-html. */
+.empty :deep(code) {
   font-family: var(--font-mono);
   font-size: 0.92em;
   padding: 1px 5px;

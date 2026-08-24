@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, onBeforeUnmount } from 'vue'
+import { t } from '../lib/i18n'
 
 defineProps({
   title: { type: String, default: '' },
@@ -24,7 +25,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
               <h3>{{ title }}</h3>
               <p v-if="subtitle" class="sub">{{ subtitle }}</p>
             </div>
-            <button class="x" aria-label="Close" @click="emit('close')">
+            <button class="x" :aria-label="t('common.close')" @click="emit('close')">
               <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
                 <path
                   d="M4 4 L16 16 M16 4 L4 16"

@@ -11,6 +11,7 @@
  */
 
 import { ref, computed } from 'vue'
+import { readStored, writeStored } from './persist'
 
 /** The table index the Kotlin side broadcasts the running-table list on. */
 export const INDEXES_TABLE_INDEX = 96782
@@ -21,8 +22,14 @@ export const MODE_HAND = 0
 const HOST_KEY = 'zigsolver.server'
 const API_KEY = 'zigsolver.api'
 
-export const serverInput = ref(localStorage.getItem(HOST_KEY) || '')
-export const apiInput = ref(localStorage.getItem(API_KEY) || '')
+/** Stored endpoint as text — anything else under the key reads as "unset". */
+function storedHost(key) {
+  const v = readStored(key)
+  return v === undefined || v === null ? '' : String(v)
+}
+
+export const serverInput = ref(storedHost(HOST_KEY))
+export const apiInput = ref(storedHost(API_KEY))
 
 /** Free-form input -> { secure, host, prefix } or null. */
 export function parseServer(input) {
@@ -49,12 +56,12 @@ export const api = computed(() => parseServer(apiInput.value))
 
 export function setServer(value) {
   serverInput.value = String(value || '').trim()
-  localStorage.setItem(HOST_KEY, serverInput.value)
+  writeStored(HOST_KEY, serverInput.value)
 }
 
 export function setApi(value) {
   apiInput.value = String(value || '').trim()
-  localStorage.setItem(API_KEY, apiInput.value)
+  writeStored(API_KEY, apiInput.value)
 }
 
 export function socketUrl(mode, tableIndex, target = server.value) {

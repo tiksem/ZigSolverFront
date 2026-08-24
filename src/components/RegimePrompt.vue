@@ -1,46 +1,57 @@
 <script setup>
 /**
- * Manual mode's question: GTO or Exploit, for THIS decision.
+ * Manual mode's question: GTO or Exploit, for THIS HAND.
  *
  * It sits where the answer will appear rather than over the table, because the
  * table is what you are reading while you decide. Nothing has been sent yet —
  * the solve starts on the click, so the choice costs no wall clock.
  *
- * Only raised where the choice is real: a spot the exploit regime cannot answer
- * goes straight to GTO without asking (see lib/regime.exploitAvailability).
+ * Raised once per hand, on the flop: the turn and the river go out under that
+ * answer rather than asking again, and preflop is never asked about because the
+ * preflop algorithm plays it either way. And only where the choice is real — a
+ * hand the exploit regime cannot answer goes straight to GTO without asking
+ * (see lib/regime.exploitAvailability).
  */
-import { REGIME_BY_VALUE } from '../lib/regime'
+import { computed } from 'vue'
+import { t, tv } from '../lib/i18n'
 
-defineProps({
+const props = defineProps({
   /** The hero's hand and the street, so the question names the spot it is about. */
   hand: { type: String, default: null },
   street: { type: String, default: null },
 })
 const emit = defineEmits(['pick'])
 
-const CHOICES = ['gto', 'exploit'].map((v) => REGIME_BY_VALUE[v])
+const CHOICES = ['gto', 'exploit']
+
+const streetLabel = computed(() =>
+  props.street
+    ? tv(`street.${props.street}`, props.street.replace(/^./, (c) => c.toUpperCase()))
+    : t('street.decision'),
+)
 </script>
 
 <template>
   <div class="prompt card">
     <div class="head">
-      <span class="eyebrow">Manual</span>
+      <span class="eyebrow">{{ t('prompt.eyebrow') }}</span>
       <span class="what">
-        {{ street ? street.replace(/^./, (c) => c.toUpperCase()) : 'Decision' }}
+        {{ streetLabel }}
         <template v-if="hand"> · {{ hand }}</template>
       </span>
     </div>
-    <p class="ask">Which answer do you want for this decision?</p>
+    <p class="ask">{{ t('prompt.ask') }}</p>
+    <p class="sub">{{ t('prompt.sub') }}</p>
     <div class="choices">
       <button
         v-for="c in CHOICES"
-        :key="c.value"
+        :key="c"
         class="choice"
-        :class="c.value"
-        @click="emit('pick', c.value)"
+        :class="c"
+        @click="emit('pick', c)"
       >
-        <span class="ctitle">{{ c.title }}</span>
-        <span class="cdesc">{{ c.tagline }}</span>
+        <span class="ctitle">{{ t(`regime.${c}.title`) }}</span>
+        <span class="cdesc">{{ t(`regime.${c}.tagline`) }}</span>
       </button>
     </div>
   </div>
@@ -65,10 +76,17 @@ const CHOICES = ['gto', 'exploit'].map((v) => REGIME_BY_VALUE[v])
 }
 
 .ask {
-  margin: 8px 0 12px;
+  margin: 8px 0 2px;
   font-size: 15px;
   font-weight: 620;
   letter-spacing: -0.01em;
+}
+
+.sub {
+  margin: 0 0 12px;
+  color: var(--label-2);
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
 .choices {

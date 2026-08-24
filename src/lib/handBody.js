@@ -15,6 +15,10 @@
  * The Python side is strict about sequence (it has to solve the spot); here we
  * only need to *render* it, so parsing is deliberately forgiving — anything
  * unreadable lands in `warnings` and the rest of the snapshot still draws.
+ *
+ * Those warnings are `{ key, params }` pairs rather than sentences: a snapshot
+ * parsed an hour ago should read in the language selected NOW, so the string is
+ * built where it is shown (i18n.tk) instead of here.
  */
 
 export const POSITION_ORDER = [
@@ -37,6 +41,22 @@ const RANKS = '23456789TJQKA'
 const ACT_RE = /^(fold|check|call|raise|bet|all[\s-]?in|allin|waiting|wait)\b\s*([\d.]*)\s*(?:bb)?\s*$/i
 
 const STREET_NAMES = ['preflop', 'flop', 'turn', 'river']
+
+/**
+ * The line the host appends when the hand is OVER instead of asking anything.
+ *
+ * It is not a player block — it has no `position=` — and the endpoint says so:
+ * `line 67: block for 'Hand finished' has no position=`. /move only answers a
+ * body that ends on the hero's decision, so a snapshot carrying this marker is
+ * never worth sending; `parseHandBody` flags it (`finished`) and the table stops
+ * short of the API rather than spending a request on a refusal.
+ */
+const HAND_OVER_RE = /^hand\s*(?:is\s*)?(?:finished|finish|over|ended|complete[d]?)\b/i
+
+/** Is this line the host's "the hand is over" marker rather than a block? */
+export function isHandOverLine(text) {
+  return HAND_OVER_RE.test(String(text || '').trim())
+}
 
 /** Does this socket frame look like a table snapshot rather than a log line? */
 export function looksLikeBody(text) {
@@ -93,8 +113,10 @@ function parseHeader(text) {
     grab(/(\d+(?:\.\d+)?)\s*BB\s+average/i) ??
     grab(/average\s+stack[^\d]*(\d+(?:\.\d+)?)/i)
   const totalPot = grab(/total\s+pot[^\d]*(\d+(?:\.\d+)?)/i)
+  // Any ONE of the three is worth showing: clients word the header differently
+  // and a missing "players paid" should not hide the average stack.
   const tournament =
-    playersLeft != null && playersPaid != null
+    playersLeft != null || playersPaid != null || averageStack != null
       ? { playersLeft, playersPaid, averageStack }
       : null
   return { tournament, totalPot, text: text.trim() }
@@ -122,7 +144,7 @@ function parseBlock(lines, warnings) {
       if (key === 'POSITION') {
         const pos = canonPos(val)
         if (pos) block.position = pos
-        else warnings.push(`line ${no}: unknown position ${val.trim()}`)
+        else warnings.push({ key: 'parse.unknownPosition', params: { line: no, value: val.trim() } })
       } else if (key === 'STACK') {
         block.stack = num(val)
       } else if (['HAND', 'CARDS', 'HOLECARDS', 'HOLE CARDS'].includes(key)) {
@@ -130,14 +152,14 @@ function parseBlock(lines, warnings) {
       } else {
         const v = num(val)
         if (v != null) block.stats[key] = v
-        else warnings.push(`line ${no}: unreadable stat ${text}`)
+        else warnings.push({ key: 'parse.unreadableStat', params: { line: no, text } })
       }
       continue
     }
     const act = parseAction(text)
     if (act) {
       if (haveAction) {
-        warnings.push(`line ${no}: second action ${text} for ${name}`)
+        warnings.push({ key: 'parse.secondAction', params: { line: no, text, name } })
         continue
       }
       block.kind = act.kind
@@ -148,17 +170,18 @@ function parseBlock(lines, warnings) {
     }
     const hand = normHand(text)
     if (hand) block.hand = hand
-    else warnings.push(`line ${no}: unrecognized line ${text}`)
+    else warnings.push({ key: 'parse.unrecognizedLine', params: { line: no, text } })
   }
   return block
 }
 
-/** Body text -> { header, events: [{type:'act'|'board', ...}] }. */
+/** Body text -> { header, events: [{type:'act'|'board', ...}], finished }. */
 function splitBody(body, warnings) {
   const events = []
   const headerLines = []
   let block = []
   let sawPlayer = false
+  let finished = false
 
   const flush = () => {
     if (!block.length) return
@@ -177,6 +200,14 @@ function splitBody(body, warnings) {
     const text = raw.trim()
     const no = i + 1
     if (!text) return flush()
+    if (isHandOverLine(text)) {
+      // Dropped rather than parsed: as a block of its own it would otherwise
+      // become a seat named "Hand finished", and glued to the last player's
+      // block it would be an unrecognized line. Either way it is the hand
+      // ending, which is the one thing the whole snapshot now means.
+      finished = true
+      return
+    }
     const low = text.toLowerCase()
     if (low.startsWith('board:') || low.startsWith('board ')) {
       flush()
@@ -193,7 +224,7 @@ function splitBody(body, warnings) {
     block.push({ no, text })
   })
   flush()
-  return { header: headerLines.join('\n'), events }
+  return { header: headerLines.join('\n'), events, finished }
 }
 
 /**
@@ -204,7 +235,7 @@ function splitBody(body, warnings) {
 export function parseHandBody(body) {
   if (!looksLikeBody(body)) return null
   const warnings = []
-  const { header, events } = splitBody(body, warnings)
+  const { header, events, finished } = splitBody(body, warnings)
   const { tournament, totalPot, text: headerText } = parseHeader(header)
 
   // --- seats, in the order the body first mentions them --------------------
@@ -331,11 +362,16 @@ export function parseHandBody(body) {
     s.streetActions = s.actions.filter((a) => a.street === street)
   }
 
+  // Nobody is on the clock on a hand that is over — including whoever the body
+  // still marks as waiting, since the marker came in after that block.
+  if (finished) for (const s of seatList) s.toAct = false
+
   // The hero block may close the body with no action line ("your turn"); if the
   // client did not mark anyone waiting, the hero is still who we answer for.
   const hero = seatList.find((s) => s.isHero) || null
   const waiting = seatList.filter((s) => s.toAct)
-  const heroToAct = !!hero && (hero.toAct || (!waiting.length && !hero.lastAction))
+  const heroToAct =
+    !finished && !!hero && (hero.toAct || (!waiting.length && !hero.lastAction))
 
   const replayedPot =
     pot + seatList.reduce((sum, s) => sum + (s.streetCommit || 0), 0)
@@ -357,6 +393,8 @@ export function parseHandBody(body) {
   return {
     kind: 'snapshot',
     raw: body,
+    // The hand is over: this body is a result, not a question. Nothing solves it.
+    finished,
     headerText,
     tournament,
     totalPot,
@@ -385,25 +423,39 @@ export function parseHandBody(body) {
 /** Stat keys the endpoint actually reads, in the order worth showing first. */
 export const CORE_STATS = ['VPIP', 'PFR', '3BET', 'ATS']
 
-export const STAT_LABELS = {
-  VPIP: 'Voluntarily put money in pot',
-  PFR: 'Preflop raise',
-  '3BET': '3-bet (GG Smart HUD definition)',
-  ATS: 'Attempt to steal',
-  F3B: 'Fold to a 3-bet',
-  'FTS BB': 'Fold the big blind to a steal',
-  'FTS SB': 'Fold the small blind to a steal',
-  'W$SD': 'Won money at showdown',
-  WTSD: 'Went to showdown',
-  WWSF: 'Won when saw flop',
-  AF: 'Aggression factor (a ratio, not a percent)',
-  'FLOP C-BET': 'Flop continuation bet',
-  'TURN C-BET': 'Turn continuation bet',
-  'RIVER C-BET': 'River continuation bet',
-  'FLOP FOLD TO C-BET': 'Folds to a flop c-bet',
-  'TURN FOLD TO C-BET': 'Folds to a turn c-bet',
-  'RIVER FOLD TO C-BET': 'Folds to a river c-bet',
-  'ALL-IN FREQUENCY': 'All-in frequency (accepted; not yet calibrated)',
+/**
+ * Every stat key the endpoint has a coefficient for.
+ *
+ * The KEYS live here and their prose lives in the message files under `stat.*`:
+ * this list is what decides whether a HUD value counts as a read (see
+ * regime.villainRead), and that must not depend on which language is selected.
+ */
+export const STAT_KEYS = [
+  'VPIP',
+  'PFR',
+  '3BET',
+  'ATS',
+  'F3B',
+  'FTS BB',
+  'FTS SB',
+  'W$SD',
+  'WTSD',
+  'WWSF',
+  'AF',
+  'FLOP C-BET',
+  'TURN C-BET',
+  'RIVER C-BET',
+  'FLOP FOLD TO C-BET',
+  'TURN FOLD TO C-BET',
+  'RIVER FOLD TO C-BET',
+  'ALL-IN FREQUENCY',
+]
+
+const KNOWN_STATS = new Set(STAT_KEYS)
+
+/** Does the endpoint read this stat at all? */
+export function isKnownStat(key) {
+  return KNOWN_STATS.has(key)
 }
 
 export function isRatioStat(key) {

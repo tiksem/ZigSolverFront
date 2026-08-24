@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { STATUS_LABEL } from '../lib/useSocket'
+import { tv } from '../lib/i18n'
 
 const props = defineProps({
   status: { type: String, default: 'idle' },
@@ -17,7 +17,7 @@ const tone = computed(() => {
 <template>
   <span class="status" :class="tone">
     <span class="dot" />
-    <span class="text">{{ label || STATUS_LABEL[status] || status }}</span>
+    <span class="text">{{ label || tv(`status.${status}`, status) }}</span>
   </span>
 </template>
 

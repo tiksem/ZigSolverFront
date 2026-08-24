@@ -10,6 +10,7 @@
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import SeatPod from './SeatPod.vue'
 import PlayingCard from './PlayingCard.vue'
+import { t, tv } from '../lib/i18n'
 
 const props = defineProps({
   hand: { type: Object, required: true },
@@ -115,7 +116,33 @@ const podScale = computed(() => {
 
 const streetLabel = computed(() => {
   const s = props.hand.streetName
-  return s ? s[0].toUpperCase() + s.slice(1) : ''
+  if (!s) return ''
+  return tv(`street.${s}`, s[0].toUpperCase() + s.slice(1))
+})
+
+/**
+ * The tournament header, as the row of chips above the street.
+ *
+ * Built as a list rather than three hard-coded chips so a header that only
+ * carries one of the three (the parser keeps whatever it found) draws that one
+ * and leaves no empty label behind.
+ */
+const tourney = computed(() => {
+  const tn = props.hand.tournament
+  if (!tn) return []
+  const rows = [
+    { key: 'playersLeft', value: tn.playersLeft, bb: false },
+    { key: 'playersPaid', value: tn.playersPaid, bb: false },
+    { key: 'averageStack', value: tn.averageStack, bb: true },
+  ]
+  return rows
+    .filter((r) => r.value != null)
+    .map((r) => ({
+      ...r,
+      label: t(`felt.${r.key}`),
+      title: t(`details.${r.key}`),
+      text: fmt(r.value),
+    }))
 })
 
 const boardSlots = computed(() => {
@@ -129,6 +156,13 @@ const boardSlots = computed(() => {
     <div class="felt" :style="{ '--pod-seats': podScale }">
       <div class="rail" />
       <div class="center">
+        <div v-if="tourney.length" class="tourney">
+          <span v-for="row in tourney" :key="row.key" class="ti" :title="row.title">
+            <em>{{ row.label }}</em>
+            <b class="tnum">{{ row.text }}<i v-if="row.bb">BB</i></b>
+          </span>
+        </div>
+
         <div class="street">{{ streetLabel }}</div>
 
         <div class="board">
@@ -139,12 +173,15 @@ const boardSlots = computed(() => {
         </div>
 
         <div class="pot">
-          <span class="pot-label">Total pot</span>
+          <span class="pot-label">{{ t('felt.totalPot') }}</span>
           <span class="pot-value tnum">{{ fmt(hand.pot, 2) }}<em>BB</em></span>
         </div>
 
-        <div v-if="hand.toCall > 0" class="tocall">
-          To call <b class="tnum">{{ fmt(hand.toCall, 2) }}BB</b>
+        <!-- A finished hand has nothing to call and nobody to act: the felt says
+             so rather than leaving the last spot looking live. -->
+        <div v-if="hand.finished" class="over">{{ t('felt.handOver') }}</div>
+        <div v-else-if="hand.toCall > 0" class="tocall">
+          {{ t('felt.toCall', { amount: `${fmt(hand.toCall, 2)}BB` }) }}
         </div>
       </div>
 
@@ -205,6 +242,50 @@ const boardSlots = computed(() => {
   text-align: center;
 }
 
+/* The tournament header. Above the street rather than out on the felt: the ring
+   owns every edge of the oval, and a chip parked up there would sit under a pod
+   at some seat counts. */
+.tourney {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.ti {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ti em {
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ti b {
+  color: #fff;
+  font-family: var(--font-rounded);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ti i {
+  font-style: normal;
+  font-size: 9.5px;
+  font-weight: 700;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+
 .street {
   color: rgba(255, 255, 255, 0.5);
   font-size: 11px;
@@ -260,13 +341,28 @@ const boardSlots = computed(() => {
   margin-left: 3px;
 }
 
+/* The amount is inside the translated sentence rather than its own <b>, so the
+   tabular figures come from the whole chip. */
 .tocall {
+  font-variant-numeric: tabular-nums;
   padding: 3px 10px;
   border-radius: var(--r-pill);
   background: color-mix(in srgb, var(--yellow) 88%, transparent);
   color: #2a2000;
   font-size: 11.5px;
   font-weight: 700;
+}
+
+/* The same chip as .tocall, in the muted key of something already settled. */
+.over {
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 /* Inset by half the tallest/widest pod, so the ring can use its full radius. */

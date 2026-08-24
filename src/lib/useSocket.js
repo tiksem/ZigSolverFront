@@ -4,9 +4,14 @@
  * Same contract the old static pages had — reconnect on close, log errors —
  * but the status is reactive so the UI can show connecting / live / retrying,
  * and the backoff grows instead of hammering a dead host every 5s forever.
+ *
+ * Frames go through `decryptMessage` on the way in, so a host that encrypts
+ * and one that doesn't both hand the same plain text to `onMessage` — see
+ * lib/crypto.js for how an encrypted frame is told apart from a clear one.
  */
 
 import { ref, shallowRef, onScopeDispose } from 'vue'
+import { decryptMessage } from './crypto'
 
 const BASE_DELAY = 1000
 const MAX_DELAY = 15000
@@ -50,6 +55,9 @@ export function useSocket({ url, onMessage, onOpen, autoConnect = true }) {
       return scheduleRetry()
     }
     socket.value = ws
+    // An encrypted frame may arrive as raw ciphertext rather than base64; as a
+    // Blob it would only ever have been readable asynchronously.
+    ws.binaryType = 'arraybuffer'
 
     ws.onopen = () => {
       if (ws !== socket.value) return
@@ -60,7 +68,7 @@ export function useSocket({ url, onMessage, onOpen, autoConnect = true }) {
     }
     ws.onmessage = (event) => {
       if (ws !== socket.value) return
-      onMessage?.(event.data, event)
+      onMessage?.(decryptMessage(event.data), event)
     }
     ws.onerror = () => {
       if (ws !== socket.value) return
@@ -122,10 +130,10 @@ export function useSocket({ url, onMessage, onOpen, autoConnect = true }) {
   return { status, attempts, lastError, socket, send, open, close, reconnect }
 }
 
-export const STATUS_LABEL = {
-  idle: 'Not connected',
-  connecting: 'Connecting…',
-  open: 'Live',
-  retrying: 'Reconnecting…',
-  closed: 'Disconnected',
-}
+/**
+ * The five states, for anything that wants to iterate them. The words are in
+ * the message files under `status.*` — StatusDot is what renders one, and it
+ * has to re-render when the language changes rather than hold a string minted
+ * when the socket last moved.
+ */
+export const STATUSES = ['idle', 'connecting', 'open', 'retrying', 'closed']

@@ -1,6 +1,7 @@
 <script setup>
-import { ref, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
+import { theme, cycleTheme } from '../lib/theme'
+import { t, localeInfo, cycleLocale } from '../lib/i18n'
 
 defineProps({
   title: { type: String, default: 'ZigSolver' },
@@ -8,25 +9,6 @@ defineProps({
   back: { type: Object, default: null },
   /** Match the wider two-column page instead of the default reading width. */
   wide: { type: Boolean, default: false },
-})
-
-const theme = ref(document.documentElement.dataset.theme || 'system')
-
-const ORDER = ['system', 'light', 'dark']
-
-function cycleTheme() {
-  theme.value = ORDER[(ORDER.indexOf(theme.value) + 1) % ORDER.length]
-  if (theme.value === 'system') {
-    delete document.documentElement.dataset.theme
-    localStorage.removeItem('zigsolver.theme')
-  } else {
-    document.documentElement.dataset.theme = theme.value
-    localStorage.setItem('zigsolver.theme', theme.value)
-  }
-}
-
-onMounted(() => {
-  theme.value = document.documentElement.dataset.theme || 'system'
 })
 </script>
 
@@ -44,7 +26,7 @@ onMounted(() => {
             stroke-linejoin="round"
           />
         </svg>
-        <span>Tables</span>
+        <span>{{ t('nav.tables') }}</span>
       </RouterLink>
 
       <div class="titles">
@@ -54,7 +36,21 @@ onMounted(() => {
 
       <div class="right">
         <slot />
-        <button class="theme" :title="`Appearance: ${theme}`" @click="cycleTheme">
+        <!-- Two languages, so the picker is a toggle rather than a menu: the
+             button shows the one that is ON and a click moves to the next. -->
+        <button
+          class="lang"
+          :title="t('nav.language', { value: localeInfo.label })"
+          :aria-label="t('nav.language', { value: localeInfo.label })"
+          @click="cycleLocale"
+        >
+          {{ localeInfo.short }}
+        </button>
+        <button
+          class="theme"
+          :title="t('nav.appearance', { value: t(`nav.theme.${theme}`) })"
+          @click="cycleTheme"
+        >
           <svg v-if="theme === 'light'" viewBox="0 0 20 20" aria-hidden="true">
             <circle cx="10" cy="10" r="3.6" fill="currentColor" />
             <g stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
@@ -153,6 +149,31 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* Sits next to the theme cycler and matches it: same pill, wide enough for a
+   two-letter code rather than round. */
+.lang {
+  min-width: 34px;
+  height: 30px;
+  padding: 0 9px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  color: var(--label-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.lang:hover {
+  background: var(--fill-strong);
+  color: var(--label);
 }
 
 .theme {

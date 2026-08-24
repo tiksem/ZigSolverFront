@@ -8,52 +8,138 @@
  *
  * Picking one re-solves the snapshot on screen. `Manual` does not — it puts
  * the table into ask-before-each-solve mode, and the asking happens where the
- * answer will be.
+ * answer will be. `Advanced` opens its two knobs first and re-solves when they
+ * are closed, so the solve is drawn at the mix you just set rather than the one
+ * you are about to change.
  *
  * Read / Bot / Pause keep their tokens and the "E" shortcut.
  */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import HelpButton from './HelpButton.vue'
 import InfoSheet from './InfoSheet.vue'
-import { REGIMES } from '../lib/regime'
+import AdvancedSheet from './AdvancedSheet.vue'
+import {
+  REGIMES,
+  regime as regimeState,
+  MIN_STATS_FOR_EXPLOIT,
+  thinReadReason,
+} from '../lib/regime'
 import { settings } from '../lib/settings'
+import { t, tk } from '../lib/i18n'
 
 const props = defineProps({
   /** Socket state — the table commands need it; a re-solve does not. */
   disabled: { type: Boolean, default: false },
-  /** 'gto' | 'exploit' | 'manual' */
+  /** 'gto' | 'exploit' | 'manual' | 'advanced' */
   selected: { type: String, default: 'gto' },
-  /** Whether the exploit regime can answer the snapshot on screen, and why not. */
-  exploitOk: { type: Boolean, default: true },
-  exploitWhy: { type: String, default: null },
+  /** lib/regime.exploitAvailability for this hand: { status, ok, why }. */
+  exploit: { type: Object, default: () => ({ status: 'pending', ok: false, why: null }) },
+  /** The HUD stats read on this spot's villain — what Advanced's gate looks at. */
+  statNames: { type: Array, default: () => [] },
+  /** What the last Advanced draw sent, and why it was not the coin's. */
+  drew: { type: Object, default: null },
   solving: { type: Boolean, default: false },
   canSolve: { type: Boolean, default: false },
 })
 const emit = defineEmits(['select', 'command', 'resolve', 'settings'])
 
 const helpFor = ref(null)
+const advanced = ref(false)
+
+/**
+ * Selectable, but it would not answer this hand the way its name says.
+ *
+ * Only a real refusal greys a chip. Preflop and the empty screen are `pending`,
+ * and dimming Exploit there would be telling the operator their selection is
+ * not in effect when all that has happened is that the flop has not come.
+ */
+const inert = (value) =>
+  (value === 'exploit' || value === 'advanced') && props.exploit.status === 'no'
+
+/** Advanced's gate on this hand's villain — the coin is skipped under it. */
+const gated = computed(
+  () => regimeState.requireStats && props.statNames.length < MIN_STATS_FOR_EXPLOIT,
+)
+
+/**
+ * Nothing decided yet: no snapshot, or preflop. The regime is chosen on the
+ * flop and preflop is the preflop algorithm's either way, so this state gets a
+ * plain statement of what the selection will do — never a fallback warning.
+ *
+ * Only the modes whose pending line differs from their tagline have a key under
+ * `regimeBar.pending`; the rest fall through to the tagline rather than
+ * repeating it in two places.
+ */
+const PENDING = ['exploit', 'manual', 'advanced']
+
+const tagline = computed(() => t(`regime.${props.selected}.tagline`))
 
 /** The line under the picker: what the next solve will actually ask for. */
 const note = computed(() => {
+  if (props.exploit.status === 'pending') {
+    return PENDING.includes(props.selected)
+      ? t(`regimeBar.pending.${props.selected}`)
+      : tagline.value
+  }
+
+  const why = tk(props.exploit.why)
+
   if (props.selected === 'manual') {
-    return props.exploitOk
-      ? 'Each decision stops and asks before anything is sent.'
-      : `Answered GTO without asking: ${props.exploitWhy}.`
+    return props.exploit.ok
+      ? t('regimeBar.manualAsks')
+      : t('regimeBar.manualSkipped', { why })
   }
-  if (props.selected === 'exploit' && !props.exploitOk) {
-    return `Falls back to GTO here: ${props.exploitWhy}.`
+  if (props.selected === 'exploit' && !props.exploit.ok) {
+    return t('regimeBar.exploitRefused', { why })
   }
-  return REGIMES.find((r) => r.value === props.selected)?.tagline || ''
+  if (props.selected === 'advanced') {
+    if (!props.exploit.ok) return t('regimeBar.advancedRefused', { why })
+    if (gated.value) {
+      return t('regimeBar.advancedRefused', { why: tk(thinReadReason(props.statNames.length)) })
+    }
+    const pct = regimeState.exploitPct
+    // The ends are legal settings and are how the mode is parked; reporting
+    // them as a mix would be describing a coin that has only one side.
+    if (pct === 0) return t('regimeBar.parkedGto')
+    if (pct === 100) return t('regimeBar.parkedExploit')
+    // The coin belongs to the hand, so it is reported as the hand's, not as the
+    // last thing that happened to be rolled.
+    const drew = props.drew
+      ? t('regimeBar.drew', { regime: t(`regime.${props.drew.coin}.title`) })
+      : ''
+    return `${t('regimeBar.mix', { pct })}${drew}`
+  }
+  return tagline.value
 })
 
+/** Orange is for a hand that is not being played the way the chip says. */
 const degraded = computed(
-  () => props.selected !== 'gto' && !props.exploitOk,
+  () =>
+    props.selected !== 'gto' &&
+    (props.exploit.status === 'no' ||
+      (props.selected === 'advanced' && props.exploit.ok && gated.value)),
 )
+
+/**
+ * Advanced is picked and configured in one gesture: the chip selects it and
+ * opens the knobs, and the solve waits until they are closed.
+ */
+function pick(value) {
+  emit('select', value)
+  if (value === 'advanced') advanced.value = true
+}
+
+function closeAdvanced() {
+  advanced.value = false
+  // A fresh draw at whatever the mix is now — the same thing selecting any
+  // other regime does.
+  if (props.canSolve) emit('resolve')
+}
 
 function onKey(e) {
   // Not while typing, and not while a help sheet has the screen.
   if (e.target instanceof Element && e.target.closest('input, textarea, select, .sheet')) return
-  if (helpFor.value) return
+  if (helpFor.value || advanced.value) return
   if (e.key === 'e' || e.key === 'E') emit('command', 'read')
 }
 onMounted(() => window.addEventListener('keydown', onKey))
@@ -64,10 +150,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   <div class="bar card">
     <section class="block">
       <div class="row head">
-        <span class="eyebrow">Regime</span>
-        <span class="muted note">What the solver is asked for</span>
+        <span class="eyebrow">{{ t('regimeBar.heading') }}</span>
+        <span class="muted note">{{ t('regimeBar.note') }}</span>
         <div class="spacer" />
-        <span v-if="solving" class="solving"><span class="spinner" />Solving…</span>
+        <span v-if="solving" class="solving">
+          <span class="spinner" />{{ t('regimeBar.solving') }}
+        </span>
       </div>
 
       <div class="regimes">
@@ -75,12 +163,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           v-for="r in REGIMES"
           :key="r.value"
           class="rwrap"
-          :class="{ on: selected === r.value, inert: r.value === 'exploit' && !exploitOk }"
+          :class="{ on: selected === r.value, inert: inert(r.value) }"
         >
-          <button class="rbtn" :title="r.tagline" @click="emit('select', r.value)">
-            {{ r.short }}
+          <button class="rbtn" :title="t(`regime.${r.value}.tagline`)" @click="pick(r.value)">
+            {{ t(`regime.${r.value}.short`) }}
+            <span v-if="r.value === 'advanced'" class="mix mono">
+              {{ regimeState.exploitPct }}%
+            </span>
           </button>
-          <HelpButton :size="17" :label="`About ${r.title}`" @click="helpFor = r" />
+          <HelpButton
+            :size="17"
+            :label="t('regimeBar.about', { name: t(`regime.${r.value}.title`) })"
+            @click="helpFor = r"
+          />
         </div>
       </div>
 
@@ -91,14 +186,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
     <section class="block bottom">
       <div class="solve">
-        <span class="eyebrow">Solve</span>
+        <span class="eyebrow">{{ t('regimeBar.solve') }}</span>
         <button class="btn btn-sm" :disabled="!canSolve || solving" @click="emit('resolve')">
-          Re-solve
+          {{ t('regimeBar.resolve') }}
         </button>
-        <button class="settings-chip" title="Solve settings" @click="emit('settings')">
+        <button
+          class="settings-chip"
+          :title="t('regimeBar.solveSettings')"
+          @click="emit('settings')"
+        >
           <span class="mono">{{ settings.maxSolveTime }}s</span>
-          <span v-if="!settings.autoSolve" class="flag">manual send</span>
-          <span v-if="!settings.useHandCache" class="flag">no cache</span>
+          <span v-if="!settings.autoSolve" class="flag">{{ t('regimeBar.manualSend') }}</span>
+          <span v-if="!settings.useHandCache" class="flag">{{ t('regimeBar.noCache') }}</span>
           <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden="true">
             <path
               d="M5 7.5 L10 12.5 L15 7.5"
@@ -113,40 +212,42 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       </div>
 
       <div class="cmds">
-        <span class="eyebrow">Table</span>
+        <span class="eyebrow">{{ t('regimeBar.tableCommands') }}</span>
         <button class="btn" :disabled="disabled" @click="emit('command', 'read')">
-          Read <kbd>E</kbd>
+          {{ t('regimeBar.read') }} <kbd>E</kbd>
         </button>
         <button class="btn btn-success" :disabled="disabled" @click="emit('command', 'bot')">
-          Bot
+          {{ t('regimeBar.bot') }}
         </button>
         <button class="btn btn-danger" :disabled="disabled" @click="emit('command', 'pause')">
-          Pause
+          {{ t('regimeBar.pause') }}
         </button>
       </div>
     </section>
 
+    <AdvancedSheet
+      v-if="advanced"
+      :exploit="exploit"
+      :stat-names="statNames"
+      @close="closeAdvanced"
+    />
+
     <InfoSheet
       v-if="helpFor"
-      :title="helpFor.title"
-      :subtitle="helpFor.tagline"
+      :title="t(`regime.${helpFor.value}.title`)"
+      :subtitle="t(`regime.${helpFor.value}.tagline`)"
       @close="helpFor = null"
     >
-      <p class="para">{{ helpFor.detail }}</p>
-      <template v-if="helpFor.limits">
-        <h4>Where it does not apply</h4>
-        <p class="para">{{ helpFor.limits }}</p>
+      <p class="para">{{ t(`regime.${helpFor.value}.detail`) }}</p>
+      <template v-if="helpFor.hasLimits">
+        <h4>{{ t('regimeBar.limitsHeading') }}</h4>
+        <p class="para">{{ t(`regime.${helpFor.value}.limits`) }}</p>
       </template>
       <template v-if="helpFor.value === 'exploit'">
-        <h4>Reading the answer</h4>
-        <p class="para">
-          The panel lists every action with its EV, best first, and the top row is the move —
-          there is no frequency to mix at. <strong>EV</strong> is counted from this decision on:
-          chips already in the pot are sunk, so folding is 0 and everything else is read against
-          it. <strong>Support</strong> is how much real play the size models saw at that size; a
-          winning branch with thin support is one the models are extrapolating on, and the
-          warnings say so.
-        </p>
+        <h4>{{ t('regimeBar.answerHeading') }}</h4>
+        <!-- v-html: the only markup is the <b> the message file itself carries,
+             and the message files are part of this bundle. -->
+        <p class="para" v-html="t('regimeBar.exploitAnswer')" />
       </template>
     </InfoSheet>
   </div>
@@ -226,6 +327,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 
 .rbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-height: 32px;
   padding: 0 14px;
   border: none;
@@ -249,6 +353,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 .rbtn:active {
   transform: scale(0.94);
+}
+
+/* The mix on the chip: the setting is one click away, but which one is set is
+   the sort of thing you want to read without opening anything. */
+.mix {
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--fill-strong);
+  color: var(--label-2);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.rwrap.on .mix {
+  background: color-mix(in srgb, var(--orange) 26%, transparent);
+  color: color-mix(in srgb, var(--orange) 86%, var(--label));
+}
+
+.mono {
+  font-family: var(--font-mono);
 }
 
 .line {

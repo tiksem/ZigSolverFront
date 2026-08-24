@@ -8,13 +8,20 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import AppNav from '../components/AppNav.vue'
 import { serverInput, server, setServer, httpUrl, displayHost } from '../lib/server'
+import { persistentRef, asBoolean, asString } from '../lib/persist'
+import { t } from '../lib/i18n'
 
 const draft = ref(serverInput.value)
 const file = ref(null)
 const previewUrl = ref(null)
-const check2 = ref(false)
-const crop = ref('')
-const tableIndex = ref('')
+// The three request options are remembered; the image is not. Iterating on a
+// crop is the whole point of this screen, and a crop is worth more than the
+// screenshot it was measured on — you re-pick the file and keep the numbers.
+const check2 = persistentRef('zigsolver.check.check2', false, asBoolean)
+const crop = persistentRef('zigsolver.check.crop', '', asString(64))
+const tableIndex = persistentRef('zigsolver.check.tableIndex', '', (v) =>
+  typeof v === 'number' ? String(v) : asString(12)(v),
+)
 const dragging = ref(false)
 const busy = ref(false)
 const error = ref(null)
@@ -60,13 +67,13 @@ function onPaste(e) {
 async function submit() {
   if (!canSubmit.value) return
   if (!cropValid.value) {
-    error.value = 'Crop must be four comma-separated integers, e.g. 100,80,640,480'
+    error.value = t('check.badCrop')
     return
   }
   setServer(draft.value)
   const url = httpUrl('/checkScreenshot')
   if (!url) {
-    error.value = 'Set a server URL first'
+    error.value = t('check.noServer')
     return
   }
 
@@ -94,10 +101,10 @@ async function submit() {
       resultUrl.value = URL.createObjectURL(await res.blob())
     } else {
       const text = await res.text()
-      resultText.value = text || '(empty response)'
+      resultText.value = text || t('check.emptyResponse')
     }
   } catch (e) {
-    error.value = `Request failed: ${e}. Check the host and that it allows this origin.`
+    error.value = t('check.failed', { error: e })
   } finally {
     elapsed.value = Math.round(performance.now() - started)
     busy.value = false
@@ -122,19 +129,21 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="wrap" @paste="onPaste">
-    <AppNav title="Screenshot check" :subtitle="displayHost()" :back="{ name: 'connect' }" />
+    <AppNav
+      :title="t('check.navTitle')"
+      :subtitle="displayHost()"
+      :back="{ name: 'connect' }"
+    />
 
     <div class="page">
       <section class="intro">
-        <h1>Check a screenshot</h1>
-        <p class="lede">
-          Posts to <code>/checkScreenshot</code>. With no crop the image goes through the
-          extractor’s debug pass; with a crop it comes back cropped to those coordinates.
-        </p>
+        <h1>{{ t('check.heading') }}</h1>
+        <!-- v-html: the <code> is the message file's own. -->
+        <p class="lede" v-html="t('check.lede')" />
       </section>
 
       <div class="card block">
-        <label class="eyebrow" for="host">Server</label>
+        <label class="eyebrow" for="host">{{ t('check.server') }}</label>
         <input
           id="host"
           v-model="draft"
@@ -155,12 +164,12 @@ onBeforeUnmount(() => {
       >
         <input id="image" class="fileinput" type="file" accept="image/*" @change="onInput" />
         <template v-if="previewUrl">
-          <img class="preview" :src="previewUrl" alt="Selected screenshot" />
+          <img class="preview" :src="previewUrl" :alt="t('check.selected')" />
           <div class="dropmeta">
             <strong>{{ file.name }}</strong>
             <span class="muted">{{ (file.size / 1024).toFixed(0) }} KB</span>
-            <label class="btn btn-sm" for="image">Replace</label>
-            <button class="btn btn-sm" @click="reset">Clear</button>
+            <label class="btn btn-sm" for="image">{{ t('check.replace') }}</label>
+            <button class="btn btn-sm" @click="reset">{{ t('check.clear') }}</button>
           </div>
         </template>
         <label v-else class="dropzone" for="image">
@@ -181,16 +190,16 @@ onBeforeUnmount(() => {
               stroke-linecap="round"
             />
           </svg>
-          <strong>Drop an image, paste, or choose a file</strong>
-          <span class="muted">PNG or JPEG</span>
+          <strong>{{ t('check.dropzone') }}</strong>
+          <span class="muted">{{ t('check.dropzoneKinds') }}</span>
         </label>
       </div>
 
       <div class="card block opts">
         <label class="opt">
           <span>
-            <strong>Check 2</strong>
-            <span class="muted">Second-pass processor instead of the extractor debug pass</span>
+            <strong>{{ t('check.check2') }}</strong>
+            <span class="muted">{{ t('check.check2Desc') }}</span>
           </span>
           <input v-model="check2" type="checkbox" class="switch" />
         </label>
@@ -199,8 +208,8 @@ onBeforeUnmount(() => {
 
         <label class="opt col">
           <span>
-            <strong>Crop</strong>
-            <span class="muted">Four integers: x1, y1, x2, y2. Leave empty for a full check.</span>
+            <strong>{{ t('check.crop') }}</strong>
+            <span class="muted">{{ t('check.cropDesc') }}</span>
           </span>
           <input
             v-model="crop"
@@ -216,8 +225,8 @@ onBeforeUnmount(() => {
 
         <label class="opt col">
           <span>
-            <strong>Table index for crop</strong>
-            <span class="muted">Which table the crop coordinates belong to</span>
+            <strong>{{ t('check.tableIndex') }}</strong>
+            <span class="muted">{{ t('check.tableIndexDesc') }}</span>
           </span>
           <input v-model="tableIndex" class="field" type="number" min="0" placeholder="0" />
         </label>
@@ -225,22 +234,24 @@ onBeforeUnmount(() => {
 
       <div class="submit">
         <button class="btn btn-primary big" :disabled="!canSubmit" @click="submit">
-          {{ busy ? 'Checking…' : 'Check screenshot' }}
+          {{ busy ? t('check.submitting') : t('check.submit') }}
         </button>
-        <span v-if="elapsed != null && !busy" class="muted">{{ elapsed }} ms</span>
+        <span v-if="elapsed != null && !busy" class="muted">
+          {{ t('check.ms', { ms: elapsed }) }}
+        </span>
       </div>
 
       <p v-if="error" class="error">{{ error }}</p>
 
       <section v-if="resultUrl || resultText" class="card result">
         <div class="rhead">
-          <span class="eyebrow">Response</span>
+          <span class="eyebrow">{{ t('check.response') }}</span>
           <div class="spacer" />
           <a v-if="resultUrl" class="btn btn-sm" :href="resultUrl" download="check.png">
-            Download
+            {{ t('check.download') }}
           </a>
         </div>
-        <img v-if="resultUrl" class="rimg" :src="resultUrl" alt="Check result" />
+        <img v-if="resultUrl" class="rimg" :src="resultUrl" :alt="t('check.resultAlt')" />
         <pre v-else class="raw mono">{{ resultText }}</pre>
       </section>
     </div>
@@ -268,7 +279,8 @@ onBeforeUnmount(() => {
   color: var(--label-2);
 }
 
-code {
+/* :deep, because the lede's <code> arrives through v-html. */
+.lede :deep(code) {
   font-family: var(--font-mono);
   font-size: 0.92em;
   padding: 1px 5px;

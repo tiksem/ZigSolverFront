@@ -4,16 +4,20 @@
  * the full HUD block per seat, the action history street by street, and the
  * body verbatim.
  */
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import PlayingCard from './PlayingCard.vue'
-import { CORE_STATS, STAT_LABELS, isRatioStat } from '../lib/handBody'
+import { CORE_STATS, isRatioStat } from '../lib/handBody'
+import { persistentRef, oneOf, asBoolean } from '../lib/persist'
+import { t, tp, tv, tk } from '../lib/i18n'
 
 const props = defineProps({
   hand: { type: Object, required: true },
 })
 
-const tab = ref('players')
-const showRaw = ref(false)
+// Which pane you read is a preference, not hand state — a reload should not put
+// you back on Players when you have been living in Action all session.
+const tab = persistentRef('zigsolver.details.tab', 'players', oneOf(['players', 'history', 'spot']))
+const showRaw = persistentRef('zigsolver.details.raw', false, asBoolean)
 
 const fmt = (n, d = 1) =>
   n == null ? '—' : (Math.round(n * 10 ** d) / 10 ** d).toLocaleString()
@@ -26,11 +30,13 @@ const statKeys = computed(() => {
   return [...core, ...rest]
 })
 
+const STREET_KEYS = ['preflop', 'flop', 'turn', 'river']
+
 const streets = computed(() =>
   props.hand.streetLog
     .map((entries, i) => ({
       index: i,
-      name: ['Preflop', 'Flop', 'Turn', 'River'][i],
+      name: t(`street.${STREET_KEYS[i]}`),
       board: props.hand.boardByStreet[i] || [],
       entries,
     }))
@@ -38,20 +44,20 @@ const streets = computed(() =>
 )
 
 function actionText(entry) {
-  const amt = entry.amount != null ? `${fmt(entry.amount)}BB` : ''
+  const amount = entry.amount != null ? `${fmt(entry.amount)}BB` : ''
   switch (entry.kind) {
     case 'fold':
-      return 'folds'
+      return t('act.fold')
     case 'check':
-      return 'checks'
+      return t('act.check')
     case 'call':
-      return amt ? `calls ${amt}` : 'calls'
+      return amount ? t('act.callAmount', { amount }) : t('act.call')
     case 'bet':
-      return `bets ${amt}`
+      return t('act.bet', { amount })
     case 'raise':
-      return `raises to ${amt}`
+      return t('act.raise', { amount })
     case 'all-in':
-      return amt ? `is all in for ${amt}` : 'is all in'
+      return amount ? t('act.allInAmount', { amount }) : t('act.allIn')
     default:
       return entry.kind || ''
   }
@@ -64,19 +70,19 @@ const tournament = computed(() => props.hand.tournament)
   <div class="details card">
     <div class="tabs" role="tablist">
       <button
-        v-for="t in [
-          { k: 'players', label: 'Players' },
-          { k: 'history', label: 'Action' },
-          { k: 'spot', label: 'Spot' },
+        v-for="pane in [
+          { k: 'players', label: t('details.tabPlayers') },
+          { k: 'history', label: t('details.tabAction') },
+          { k: 'spot', label: t('details.tabSpot') },
         ]"
-        :key="t.k"
+        :key="pane.k"
         class="tab"
-        :class="{ on: tab === t.k }"
+        :class="{ on: tab === pane.k }"
         role="tab"
-        :aria-selected="tab === t.k"
-        @click="tab = t.k"
+        :aria-selected="tab === pane.k"
+        @click="tab = pane.k"
       >
-        {{ t.label }}
+        {{ pane.label }}
       </button>
     </div>
 
@@ -86,15 +92,15 @@ const tournament = computed(() => props.hand.tournament)
         <table>
           <thead>
             <tr>
-              <th class="left">Player</th>
-              <th>Pos</th>
-              <th class="num">Stack</th>
-              <th class="num">In pot</th>
+              <th class="left">{{ t('details.player') }}</th>
+              <th>{{ t('details.position') }}</th>
+              <th class="num">{{ t('details.stack') }}</th>
+              <th class="num">{{ t('details.inPot') }}</th>
               <th
                 v-for="k in statKeys"
                 :key="k"
                 class="num"
-                :title="STAT_LABELS[k] || k"
+                :title="tv(`stat.${k}`, k)"
               >
                 {{ k }}
               </th>
@@ -103,12 +109,12 @@ const tournament = computed(() => props.hand.tournament)
           <tbody>
             <tr v-for="s in hand.seats" :key="s.name" :class="{ hero: s.isHero, out: s.folded }">
               <td class="left">
-                <span class="pname">{{ s.isHero ? 'You' : s.name }}</span>
+                <span class="pname">{{ s.isHero ? t('details.you') : s.name }}</span>
                 <span v-if="s.hand" class="inline-cards">
                   <PlayingCard v-for="c in s.hand" :key="c" :card="c" size="sm" />
                 </span>
-                <span v-if="s.allIn" class="mini red">all in</span>
-                <span v-else-if="s.folded" class="mini">folded</span>
+                <span v-if="s.allIn" class="mini allin">{{ t('details.allIn') }}</span>
+                <span v-else-if="s.folded" class="mini">{{ t('details.folded') }}</span>
               </td>
               <td>{{ s.position || '—' }}</td>
               <td class="num tnum">{{ fmt(s.stack) }}</td>
@@ -123,11 +129,8 @@ const tournament = computed(() => props.hand.tournament)
           </tbody>
         </table>
       </div>
-      <p class="fine">
-        Stacks are chips <em>behind</em> — posted and bet chips are excluded. Missing stats fall
-        back to population averages on the solver side; <code>3BET</code> is the GG Smart HUD
-        definition and is converted before it reaches rangegen.
-      </p>
+      <!-- v-html: the <i> and <code> come from the message file, which is ours. -->
+      <p class="fine" v-html="t('details.playersFine')" />
     </div>
 
     <!-- Action history ------------------------------------------------------ -->
@@ -141,53 +144,61 @@ const tournament = computed(() => props.hand.tournament)
         </div>
         <ul v-if="s.entries.length" class="acts">
           <li v-for="(e, i) in s.entries" :key="i">
-            <span class="who">{{ e.name === '*me*' ? 'You' : e.name }}</span>
+            <span class="who">{{ e.name === '*me*' ? t('details.you') : e.name }}</span>
             <span class="what" :class="e.kind">{{ actionText(e) }}</span>
           </li>
         </ul>
-        <p v-else class="fine">No action recorded on this street.</p>
+        <p v-else class="fine">{{ t('details.noAction') }}</p>
       </div>
-      <div v-if="hand.heroToAct" class="turn">Your turn — the client is asking for a decision.</div>
+      <div v-if="hand.heroToAct" class="turn">{{ t('details.yourTurn') }}</div>
     </div>
 
     <!-- Spot ---------------------------------------------------------------- -->
     <div v-else class="pane">
       <div class="grid">
         <div class="fact">
-          <span class="fl">Street</span><span class="fv">{{ hand.streetName }}</span>
+          <span class="fl">{{ t('details.street') }}</span>
+          <span class="fv">{{ tv(`street.${hand.streetName}`, hand.streetName) }}</span>
         </div>
         <div class="fact">
-          <span class="fl">Table size</span><span class="fv">{{ hand.tableSize }} seats</span>
+          <span class="fl">{{ t('details.tableSize') }}</span>
+          <span class="fv">{{ tp('details.seatCount', hand.tableSize) }}</span>
         </div>
         <div class="fact">
-          <span class="fl">Contenders</span><span class="fv">{{ hand.contenders }}</span>
+          <span class="fl">{{ t('details.contenders') }}</span
+          ><span class="fv">{{ hand.contenders }}</span>
         </div>
         <div class="fact">
-          <span class="fl">Total pot</span><span class="fv">{{ fmt(hand.pot, 2) }} BB</span>
+          <span class="fl">{{ t('details.totalPot') }}</span
+          ><span class="fv">{{ fmt(hand.pot, 2) }} BB</span>
         </div>
         <div class="fact">
-          <span class="fl">Replayed pot</span
+          <span class="fl">{{ t('details.replayedPot') }}</span
           ><span class="fv">{{ fmt(hand.replayedPot, 2) }} BB</span>
         </div>
         <div class="fact">
-          <span class="fl">Current bet</span><span class="fv">{{ fmt(hand.currentBet, 2) }} BB</span>
+          <span class="fl">{{ t('details.currentBet') }}</span
+          ><span class="fv">{{ fmt(hand.currentBet, 2) }} BB</span>
         </div>
         <div class="fact">
-          <span class="fl">Hero to call</span><span class="fv">{{ fmt(hand.toCall, 2) }} BB</span>
+          <span class="fl">{{ t('details.heroToCall') }}</span
+          ><span class="fv">{{ fmt(hand.toCall, 2) }} BB</span>
         </div>
         <div class="fact">
-          <span class="fl">Hero hand</span>
+          <span class="fl">{{ t('details.heroHand') }}</span>
           <span class="fv">{{ hand.heroHand ? hand.heroHand.join(' ') : '—' }}</span>
         </div>
         <template v-if="tournament">
-          <div class="fact">
-            <span class="fl">Players left</span><span class="fv">{{ tournament.playersLeft }}</span>
+          <div v-if="tournament.playersLeft != null" class="fact">
+            <span class="fl">{{ t('details.playersLeft') }}</span
+            ><span class="fv">{{ tournament.playersLeft }}</span>
           </div>
-          <div class="fact">
-            <span class="fl">Players paid</span><span class="fv">{{ tournament.playersPaid }}</span>
+          <div v-if="tournament.playersPaid != null" class="fact">
+            <span class="fl">{{ t('details.playersPaid') }}</span
+            ><span class="fv">{{ tournament.playersPaid }}</span>
           </div>
-          <div class="fact">
-            <span class="fl">Average stack</span>
+          <div v-if="tournament.averageStack != null" class="fact">
+            <span class="fl">{{ t('details.averageStack') }}</span>
             <span class="fv">{{ fmt(tournament.averageStack) }} BB</span>
           </div>
         </template>
@@ -196,11 +207,11 @@ const tournament = computed(() => props.hand.tournament)
       <p v-if="hand.headerText" class="header-quote">{{ hand.headerText }}</p>
 
       <ul v-if="hand.warnings.length" class="warnings">
-        <li v-for="(w, i) in hand.warnings" :key="i">{{ w }}</li>
+        <li v-for="(w, i) in hand.warnings" :key="i">{{ tk(w) }}</li>
       </ul>
 
       <button class="btn btn-sm rawtoggle" @click="showRaw = !showRaw">
-        {{ showRaw ? 'Hide snapshot' : 'Show raw snapshot' }}
+        {{ showRaw ? t('details.hideRaw') : t('details.showRaw') }}
       </button>
       <pre v-if="showRaw" class="raw mono">{{ hand.raw }}</pre>
     </div>
@@ -322,9 +333,9 @@ tr.out {
   text-transform: uppercase;
 }
 
-.mini.red {
-  background: color-mix(in srgb, var(--red) 16%, transparent);
-  color: var(--red);
+.mini.allin {
+  background: color-mix(in srgb, var(--allin) 16%, transparent);
+  color: var(--allin);
 }
 
 .street + .street {
@@ -390,7 +401,7 @@ tr.out {
 }
 
 .what.all-in {
-  color: var(--red);
+  color: var(--allin);
   font-weight: 700;
 }
 
@@ -459,9 +470,15 @@ tr.out {
   line-height: 1.5;
 }
 
-code {
+/* :deep, because .fine's markup arrives through v-html and so carries no
+   scope attribute of its own. */
+.fine :deep(code) {
   font-family: var(--font-mono);
   font-size: 0.92em;
+}
+
+.fine :deep(i) {
+  font-style: italic;
 }
 
 .rawtoggle {

@@ -6,6 +6,9 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   base: './',
   plugins: [vue()],
-  server: { port: 5173 },
+  // 5173 unless PORT says otherwise, so a second dev server (another agent's,
+  // another checkout's) can be told where to land instead of silently sliding
+  // to 5174 and leaving whoever launched it pointed at the wrong port.
+  server: { port: Number(process.env.PORT) || 5173 },
   build: { outDir: 'dist', emptyOutDir: true },
 })

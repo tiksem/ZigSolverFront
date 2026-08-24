@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import { t } from '../lib/i18n'
 
 const props = defineProps({
   /** Engine token: 'Qs', 'Th', '4d'… */
@@ -9,15 +10,18 @@ const props = defineProps({
 })
 
 const SUITS = {
-  s: { glyph: '♠', name: 'spades', color: 'var(--card-ink)' },
-  h: { glyph: '♥', name: 'hearts', color: '#e0322c' },
-  d: { glyph: '♦', name: 'diamonds', color: '#1f6fe0' },
-  c: { glyph: '♣', name: 'clubs', color: '#1f9d55' },
+  s: { key: 's', glyph: '♠', color: 'var(--card-ink)' },
+  h: { key: 'h', glyph: '♥', color: '#e0322c' },
+  d: { key: 'd', glyph: '♦', color: '#1f6fe0' },
+  c: { key: 'c', glyph: '♣', color: '#1f9d55' },
 }
 
 const rank = computed(() => (props.card || '').slice(0, 1).toUpperCase())
 const suit = computed(() => SUITS[(props.card || '').slice(1, 2).toLowerCase()] || SUITS.s)
-const label = computed(() => `${rank.value} of ${suit.value.name}`)
+// Screen-reader only: the face itself is a rank and a glyph in every language.
+const label = computed(() =>
+  t('card.label', { rank: rank.value, suit: t(`card.suit.${suit.value.key}`) }),
+)
 </script>
 
 <template>

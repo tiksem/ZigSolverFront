@@ -22,6 +22,7 @@ Dependency-free (the WebSocket handshake and framing are done by hand, as in
 | `ws /commands?mode=0&tableIndex=96782` | `Indexes: 0,3,7,9`, repeated every 8s |
 | `ws /commands?mode=0&tableIndex=N` | a live table |
 | `POST /checkScreenshot` | echoes the uploaded image back |
+| `GET /image/N` | table N's screen as a 1920x1080 PNG — a felt with the table number and the wall clock on it. What the app fetches when a `/move` fails, to post to the API's `/screenError`. Encrypted under `--encrypt`, like every frame. |
 | `GET /tables` | what is running, as JSON |
 
 This is the **bot host only** — there is no `/move` here. It is meant to be
@@ -46,9 +47,10 @@ Two things the real API changes about how you run this:
 * **Postflop is served up to 3 players**, so the table does not deal wider
   fields — see `--max-flop-players` below.
 
-Every body this generates has been run through the real
+Every *decision* body this generates has been run through the real
 [`api/handhistory.py`](../../ZigSolver/api/handhistory.py): 312 of 312 accepted,
-including its `require_decision()`.
+including its `require_decision()`. The end-of-hand body is the deliberate
+exception — it is exactly what that check refuses, and the app never sends it.
 
 ## Options
 
@@ -59,6 +61,7 @@ including its `require_decision()`.
 | `--seed 12345` | same seed, same cards — a spot can be replayed |
 | `--hero-delay 9000` | ms the hero sits on a decision before playing it out; give a real solver ~60000 |
 | `--max-flop-players 3` | how wide a flop may be dealt; `0` lifts the cap |
+| `--encrypt` | send every frame as base64 AES-256-CBC, the way a host built with a `hashSecret` does. The app sniffs each frame, so the table looks the same either way — this is how you check that it does |
 | `--quiet` | do not print what goes out |
 
 `--max-flop-players` exists because ZigSolver's postflop advice supports up to
@@ -82,6 +85,11 @@ the clock, which is the only frame the front end solves. It is the format
 [handBody.js](../src/lib/handBody.js) parses: an optional tournament header, one
 block per action in acting order, `Board:` lines between streets, and the hero
 closing it on `waiting`.
+
+**The end-of-hand body** — the same history with a `Hand finished` block on the
+end instead of a decision, sent once when the hand settles. A snapshot by shape,
+a result by meaning: `/move` only answers a body that closes on the hero, so the
+app stops at the felt and sends nothing.
 
 **Log lines** — everything else, which the app shows as notifications and keeps
 in the message dock:

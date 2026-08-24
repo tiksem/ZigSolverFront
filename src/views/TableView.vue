@@ -12,6 +12,12 @@
  * the operator picks, so a decision they have not answered yet has spent no
  * budget. It is only held where the choice matters — a spot the exploit regime
  * cannot answer would come back GTO either way, so it goes straight out.
+ *
+ * Both of the modes that CHOOSE a regime — manual's answer and advanced's coin
+ * — are decided once per hand and reused by that hand's later streets, so the
+ * turn is answered by whatever the flop was. `handIdFor` draws the boundary: it
+ * changes when the hero's cards change or the board or the pot goes backwards,
+ * which means it does not depend on the host announcing a new hand.
  */
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
@@ -22,8 +28,9 @@ import RegimeBar from '../components/RegimeBar.vue'
 import RegimePrompt from '../components/RegimePrompt.vue'
 import SolverPanel from '../components/SolverPanel.vue'
 import { useSocket } from '../lib/useSocket'
-import { parseHandBody } from '../lib/handBody'
+import { parseHandBody, isHandOverLine } from '../lib/handBody'
 import { solveMove, cancelSolve, createHandIds } from '../lib/zigsolver'
+import { captureScreenError, resetScreenErrors } from '../lib/screenError'
 import SettingsSheet from '../components/SettingsSheet.vue'
 import MessageDock from '../components/MessageDock.vue'
 import { notify } from '../lib/notify'
@@ -37,7 +44,15 @@ import {
   displayApi,
 } from '../lib/server'
 import { settings } from '../lib/settings'
-import { regime, setRegime, exploitAvailability } from '../lib/regime'
+import { t, tv } from '../lib/i18n'
+import {
+  regime,
+  setRegime,
+  exploitAvailability,
+  flipRegimeCoin,
+  resolveAdvanced,
+  villainRead,
+} from '../lib/regime'
 
 const props = defineProps({ index: { type: Number, required: true } })
 const router = useRouter()
@@ -47,6 +62,15 @@ if (!server.value || !api.value) router.replace({ name: 'connect' })
 const hand = ref(null)
 const result = ref(null)
 const solving = ref(false)
+/**
+ * `performance.now()` at the moment the /move fetch went out, or null.
+ *
+ * The panel counts up from it while the answer is outstanding, and the same
+ * clock is stopped on arrival and carried on the result as `clientSeconds` —
+ * so what the operator watched tick and what is compared against the API's own
+ * `responseTime` are the one measurement, not two that can disagree.
+ */
+const solveStartedAt = ref(null)
 const feed = ref([])
 const showSettings = ref(false)
 
@@ -97,17 +121,85 @@ const handIdFor = createHandIds(props.index)
 const handUrl = computed(() => socketUrl(MODE_HAND, props.index))
 const canSolve = computed(() => !!lastBody.value && !!api.value)
 
-/** Whether the exploit regime can answer the snapshot on screen, and why not. */
+/** Whether the exploit regime can answer this hand — 'ok' / 'pending' / 'no'. */
 const exploit = computed(() => exploitAvailability(hand.value))
 
+/** The HUD stats read on this spot's villain — Advanced's gate reads them. */
+const villainStats = computed(() => villainRead(hand.value).stats)
+
+/** How this hand's Advanced coin came up, for the bar to report. */
+const drew = ref(null)
+
 /**
- * The regime to actually send. `manual` is not one, so it only ever reaches
- * here resolved; and on a spot exploit cannot answer, asking would be asking a
- * question with one answer.
+ * This hand's choice under the two modes that make one, keyed by the hand it
+ * was made for. A key that no longer matches `lastHandId` is a stale answer to
+ * a hand that is over, which is the same thing as not having one.
  */
-function regimeToSend(picked) {
-  const want = picked || regime.selected
-  if (want === 'manual') return 'gto'
+let coinHandId = null
+let coinValue = null
+let pickHandId = null
+let pickValue = null
+
+/**
+ * Advanced: this hand's coin, flipped on its FLOP and kept for the rest of it.
+ *
+ * Only ever called once the hand is past preflop, so the flip lands on the
+ * street the mode says it does — drawing preflop would spend the hand's coin on
+ * a decision the preflop algorithm was always going to play.
+ */
+function handCoin() {
+  if (coinHandId !== lastHandId) {
+    coinHandId = lastHandId
+    coinValue = flipRegimeCoin()
+  }
+  return coinValue
+}
+
+/** Manual: what the operator answered for this hand, or null while unanswered. */
+function handPick() {
+  return pickHandId === lastHandId ? pickValue : null
+}
+
+function forgetHandChoice() {
+  coinHandId = null
+  coinValue = null
+  pickHandId = null
+  pickValue = null
+}
+
+/**
+ * The regime to actually send.
+ *
+ * `manual` and `advanced` are not ones — they are how the regime for THIS HAND
+ * is chosen, by asking or by drawing on the flop, and either way the answer is
+ * reused by the turn and the river rather than re-asked. `picked` is the manual
+ * answer on its way in from the prompt, and it is recorded against the hand.
+ *
+ * Preflop leaves all of that alone. It goes out as `gto` because that is the
+ * endpoint's name for "play it with the preflop algorithm", and it neither
+ * spends the hand's coin nor counts as the hand having been answered.
+ */
+function regimeToSend(picked = null) {
+  if (picked && regime.selected === 'manual') {
+    pickHandId = lastHandId
+    pickValue = picked
+  }
+
+  if (exploit.value.status === 'pending') {
+    drew.value = null
+    return 'gto'
+  }
+
+  if (regime.selected === 'advanced') {
+    const out = resolveAdvanced(hand.value, handCoin())
+    drew.value = out
+    return out.regime
+  }
+  drew.value = null
+
+  // Manual with nothing answered yet only reaches here on a hand not worth
+  // asking about, which is GTO by definition.
+  const want = regime.selected === 'manual' ? handPick() || 'gto' : regime.selected
   if (want === 'exploit' && !exploit.value.ok) return 'gto'
   return want
 }
@@ -117,20 +209,115 @@ const handSock = useSocket({
   onMessage: (data) => onHandMessage(String(data)),
 })
 
+/**
+ * Is this snapshot LESS of the spot already on the felt, rather than a new one?
+ *
+ * The host builds the body by appending and re-reads the table on a timer, so a
+ * poll that lands on a spot nothing has happened on can still come back
+ * DIFFERENT: the tail is missing, most often the hero's own trailing block —
+ * the one that says whose turn it is. (KScanner does it deterministically: it
+ * appends `*me* waiting` only on the poll where the hero BECOMES to act, so
+ * every later poll of the same decision drops it.)
+ *
+ * A different string is what makes this dangerous. The byte-equality check
+ * below lets it through, and acting on it aborts the solve in flight and starts
+ * it again from zero for a decision already being answered — two 10s solves for
+ * one spot, and the first answer thrown away (measured on QJo 3-way,
+ * 2026-08-23).
+ *
+ * Two shapes, both meaning "no action has been added since":
+ *
+ *   * every byte of the new body is already in the old one — a straight
+ *     truncation, whatever it cut;
+ *   * the same board, and a client that WAS marking someone to act has stopped
+ *     — the partial read that also lost a digit somewhere, so it is not a
+ *     prefix. Only the hero's own block carries that mark on the street being
+ *     played, so losing it is the tell rather than a legitimate change: the
+ *     host pushes a snapshot to ask what to do, and this one asks nothing.
+ */
+function isPartialReread(parsed) {
+  const prev = hand.value
+  if (!prev || !lastBody.value) return false
+  const before = lastBody.value.trimEnd()
+  const after = parsed.raw.trimEnd()
+  if (after.length < before.length && before.startsWith(after)) return true
+  return (
+    !!prev.waitingOn &&
+    !parsed.waitingOn &&
+    parsed.board.join('') === prev.board.join('')
+  )
+}
+
+/** Drop whatever is solving or waiting to be asked: its spot is gone. */
+function stopSolving() {
+  abortInFlight()
+  clearTimeout(coalesceTimer)
+  coalesceTimer = null
+  solveSeq++
+  solveStartedAt.value = null
+  pending.value = null
+  updateBusy()
+}
+
+/**
+ * The hand is over.
+ *
+ * The final table stays on the felt — with `parsed`, the snapshot that carried
+ * the marker — but nothing more goes out for it. `lastBody` is cleared rather
+ * than kept, so neither the auto-solve nor the Re-solve button can spend a
+ * request on a body /move will refuse: it only answers one that ends on the
+ * hero's decision, and this one ends on the hand ending.
+ */
+function handOver(parsed) {
+  stopSolving()
+  if (parsed) hand.value = parsed
+  lastBody.value = null
+  lastHandId = null
+  drew.value = null
+  forgetHandChoice()
+}
+
 function onHandMessage(text) {
   const parsed = parseHandBody(text)
   if (parsed) {
-    // Identical body re-sent (a re-read of the same spot): the answer on screen
-    // already covers it, so do not spend a solve on it.
+    // A snapshot that ends on "Hand finished" is a RESULT, not a question — the
+    // hand it describes has no decision left in it. Held here, before anything
+    // is sent: the endpoint refuses it ("block for 'Hand finished' has no
+    // position="), so solving it costs a round trip to be told what we already
+    // know. Repeats of the same finished body are ignored outright.
+    if (parsed.finished) {
+      if (hand.value?.finished && hand.value.raw === parsed.raw) return
+      // No notification: the host narrates the result on its own line a moment
+      // later, and the felt says HAND FINISHED for as long as it is on screen.
+      handOver(parsed)
+      return
+    }
+    // Byte-for-byte the same body as the one already on the felt: the client is
+    // re-reading a spot nothing has happened on. Ignore it outright — the answer
+    // on screen (or the one being solved, or the question waiting to be picked)
+    // is for exactly this snapshot.
+    //
+    // Ignoring rather than re-solving is what makes a chatty client survivable:
+    // a re-read while the solve is in flight would abort that solve and start it
+    // again from zero, so a host that re-reads faster than the solver answers
+    // would never get an answer at all. Re-parsing it would also swap `hand` for
+    // an identical object and redraw the whole table for nothing.
     const unchanged = parsed.raw === lastBody.value
+    if (unchanged && (solving.value || result.value || pending.value)) return
+    // The same spot arriving with its tail cut off. Held to the same rule as an
+    // identical re-read, and for the same reason — except that this one must be
+    // dropped even with nothing on screen yet, since there is no newer question
+    // in it to replace the one being solved.
+    if (isPartialReread(parsed)) return
     hand.value = parsed
     lastBody.value = parsed.raw
     lastHandId = handIdFor(parsed)
-    if (settings.autoSolve && (!unchanged || !result.value)) {
+    if (settings.autoSolve) {
       // Manual mode asks first — and asks about the NEWEST snapshot, so a
       // question raised for a spot the table has moved past is replaced rather
-      // than answered.
-      if (regime.selected === 'manual' && exploit.value.ok) {
+      // than answered. Once per hand: a later street of a hand already answered
+      // goes straight out under that answer.
+      if (regime.selected === 'manual' && exploit.value.ok && !handPick()) {
         abortInFlight()
         clearTimeout(coalesceTimer)
         coalesceTimer = null
@@ -143,17 +330,18 @@ function onHandMessage(text) {
     }
     return
   }
+  // The same news as a plain line, with no snapshot under it: the felt keeps the
+  // last decision, but that decision is no longer live.
+  if (isHandOverLine(text)) handOver(null)
   if (/new hand/i.test(text)) {
     // The spot on screen is over; anything still solving for it is wasted.
-    abortInFlight()
-    clearTimeout(coalesceTimer)
-    coalesceTimer = null
-    solveSeq++
-    updateBusy()
+    stopSolving()
     hand.value = null
     result.value = null
     lastBody.value = null
-    pending.value = null
+    lastHandId = null
+    drew.value = null
+    forgetHandChoice()
     feed.value = []
   }
   // Everything the host says that is not a snapshot: a notification now, and
@@ -188,12 +376,51 @@ function abortInFlight() {
 /** Supersede whatever is running and solve the newest snapshot. */
 function scheduleSolve() {
   abortInFlight()
+  // The superseded solve's clock stops with it: the coalescing window belongs to
+  // the replacement, and counting on from the old start would then jump back to
+  // zero when the new request actually goes out.
+  solveStartedAt.value = null
   clearTimeout(coalesceTimer)
   coalesceTimer = setTimeout(() => {
     coalesceTimer = null
     solve()
   }, COALESCE_MS)
   updateBusy()
+}
+
+/**
+ * A call came back an error: photograph the table it failed on.
+ *
+ * The endpoint refuses a body that describes a table that cannot exist — a pot
+ * the seats do not add up to, a card dealt twice, a block with no position — and
+ * that is a MISREAD, not a solve that went wrong. The snapshot says what the
+ * host read; only the screen says what there was to read. So the picture is
+ * pulled off the host and filed against this hand (lib/screenError.js).
+ *
+ * Fire-and-forget, and quiet unless it works: the operator has already been
+ * shown the error that matters, and a diagnostic that could not be taken is not
+ * a second thing to read.
+ */
+function captureFailure(err, request) {
+  // Nothing to send it to. The endpoint being unreachable is exactly the one
+  // error whose capture cannot be delivered, and the screenshot is megabytes —
+  // so this skips the fetch rather than spending it to fail.
+  if (err.message?.key === 'api.unreachable') return
+
+  captureScreenError({
+    tableIndex: props.index,
+    handId: request.handId || lastHandId,
+    requestId: request.requestId,
+    regime: request.regime,
+    street: hand.value?.streetName ?? null,
+    error: err.message,
+    hint: err.hint,
+    status: err.status ?? null,
+    body: request.body,
+  }).then((out) => {
+    if (out.ok) notify(t('table.screenCaptured'), { tone: 'info' })
+    else if (out.reason) console.warn(`[screenError] not captured: ${out.reason}`)
+  })
 }
 
 /** POST the current snapshot under `picked`, or the selected regime. */
@@ -225,11 +452,16 @@ async function solve(picked = null) {
     regime: regimeToSend(picked),
   }
 
+  const started = performance.now()
+  solveStartedAt.value = started
   updateBusy()
   try {
     const out = await solveMove(url, request, controller.signal)
+    const clientSeconds = (performance.now() - started) / 1000
     if (out.type === 'cancelled') return
     if (seq === solveSeq) {
+      // What the browser actually waited, next to what the API says it spent.
+      out.clientSeconds = clientSeconds
       // Re-solving the same spot should not also re-roll the dice. Only a GTO
       // answer has a draw to hold; an exploit answer's top row is the move.
       if (
@@ -244,22 +476,39 @@ async function solve(picked = null) {
         if (still) out.sampled = still
       }
       result.value = out
+      if (out.type === 'error') captureFailure(out, request)
     }
   } catch (e) {
     // An abort is us superseding ourselves — never an error to show.
     if (e.name !== 'AbortError' && seq === solveSeq) {
-      result.value = { type: 'error', id: seq, message: String(e), request }
+      const failed = {
+        type: 'error',
+        id: seq,
+        message: String(e),
+        request,
+        clientSeconds: (performance.now() - started) / 1000,
+      }
+      result.value = failed
+      captureFailure(failed, request)
     }
   } finally {
     if (inFlight === controller) inFlight = null
     // Finished: there is nothing left to cancel under this id.
     if (currentRequestId === rid) currentRequestId = null
+    // Only the newest solve owns the clock — an older one finishing (or being
+    // superseded) must not stop the timer the replacement just started.
+    if (seq === solveSeq) solveStartedAt.value = null
     updateBusy()
   }
 }
 
 function selectRegime(value) {
   setRegime(value)
+  // Picking a regime is a deliberate gesture about the hand in front of you, so
+  // it drops whatever that hand had already been assigned — otherwise clicking
+  // Manual mid-hand would silently reuse the answer you clicked in order to
+  // change, and clicking Advanced would keep a coin drawn at the old mix.
+  forgetHandChoice()
   if (value === 'manual') {
     // Switching INTO manual mid-hand asks about the spot on screen rather than
     // waiting for the table to move; there is an answer up already, so nothing
@@ -270,12 +519,16 @@ function selectRegime(value) {
     return
   }
   pending.value = null
+  // Advanced opens its knobs on the same click; the bar re-solves when they
+  // close, so the draw is made at the mix the operator has just settled on
+  // rather than at the one they are still moving.
+  if (value === 'advanced') return
   if (lastBody.value) solve()
 }
 
 function command(token) {
   const ok = handSock.send(token)
-  showToast(ok ? `Sent “${token}”` : 'Not connected — command dropped', ok)
+  showToast(ok ? t('table.sent', { token }) : t('table.dropped'), ok)
 }
 
 function showToast(text, ok = true) {
@@ -285,16 +538,17 @@ function showToast(text, ok = true) {
 watch(
   () => props.index,
   () => {
-    abortInFlight()
-    clearTimeout(coalesceTimer)
-    coalesceTimer = null
-    solveSeq++
-    updateBusy()
+    stopSolving()
     hand.value = null
     result.value = null
     feed.value = []
     lastBody.value = null
-    pending.value = null
+    lastHandId = null
+    drew.value = null
+    forgetHandChoice()
+    // A capture is remembered so one bug is photographed once; a different
+    // table is a different set of bugs.
+    resetScreenErrors()
     handSock.reconnect()
   },
 )
@@ -310,20 +564,33 @@ onBeforeUnmount(() => {
 <template>
   <div class="wrap">
     <AppNav
-      :title="`Table ${index}`"
-      :subtitle="`${displayHost()}  ·  solver ${displayApi()}`"
+      :title="t('table.title', { index })"
+      :subtitle="t('table.subtitle', { host: displayHost(), api: displayApi() })"
       :back="{ name: 'connect' }"
       wide
     >
       <StatusDot
         :status="handSock.status.value"
-        :label="`Table · ${handSock.status.value === 'open' ? 'live' : handSock.status.value}`"
+        :label="
+          t('table.socket', {
+            status:
+              handSock.status.value === 'open'
+                ? t('table.socketLive')
+                : tv(`status.${handSock.status.value}`, handSock.status.value),
+          })
+        "
       />
       <StatusDot
         :status="solving ? 'connecting' : result?.type === 'error' ? 'closed' : 'open'"
-        :label="solving ? 'Solver · solving' : result?.type === 'error' ? 'Solver · error' : 'Solver · ready'"
+        :label="
+          solving
+            ? t('table.solverSolving')
+            : result?.type === 'error'
+              ? t('table.solverError')
+              : t('table.solverReady')
+        "
       />
-      <button class="gear" title="Settings" @click="showSettings = true">
+      <button class="gear" :title="t('nav.settings')" @click="showSettings = true">
         <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
           <circle cx="10" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7" />
           <path
@@ -345,11 +612,8 @@ onBeforeUnmount(() => {
         <div v-if="handSock.status.value !== 'open'" class="offline card">
           <div class="spinner" />
           <div>
-            <strong>Connecting to {{ displayHost() }}</strong>
-            <p class="muted">
-              The table socket retries automatically. If the table is not running the host replies
-              with a message on the feed below.
-            </p>
+            <strong>{{ t('table.connecting', { host: displayHost() }) }}</strong>
+            <p class="muted">{{ t('table.connectingNote') }}</p>
           </div>
         </div>
 
@@ -358,11 +622,9 @@ onBeforeUnmount(() => {
              tab is backgrounded (rAF throttling), which would strand the table. -->
         <PokerTable v-if="hand" :hand="hand" />
         <div v-else class="empty card">
-          <p><strong>No snapshot yet</strong></p>
-          <p class="muted">
-            The table pushes its state when the hero has a decision, and it is sent to the solver as
-            it arrives. Hit <kbd>Read</kbd> to ask the runner to re-read the table.
-          </p>
+          <p><strong>{{ t('table.noSnapshot') }}</strong></p>
+          <!-- v-html: the <kbd> is the message file's own. -->
+          <p class="muted" v-html="t('table.noSnapshotNote')" />
         </div>
       </div>
 
@@ -370,8 +632,9 @@ onBeforeUnmount(() => {
         <RegimeBar
           :disabled="handSock.status.value !== 'open'"
           :selected="regime.selected"
-          :exploit-ok="exploit.ok"
-          :exploit-why="exploit.why"
+          :exploit="exploit"
+          :stat-names="villainStats"
+          :drew="drew"
           :solving="solving"
           :can-solve="canSolve"
           @select="selectRegime"
@@ -387,11 +650,16 @@ onBeforeUnmount(() => {
           @pick="solve"
         />
 
-        <SolverPanel :result="result" :pending="solving" :regime="regime.selected" />
+        <SolverPanel
+          :result="result"
+          :pending="solving"
+          :started-at="solveStartedAt"
+          :regime="regime.selected"
+        />
       </aside>
     </div>
 
-    <MessageDock :messages="feed" title="Host messages" @clear="feed = []" />
+    <MessageDock :messages="feed" :title="t('table.hostMessages')" @clear="feed = []" />
 
     <SettingsSheet v-if="showSettings" @close="showSettings = false" />
   </div>
@@ -492,7 +760,8 @@ onBeforeUnmount(() => {
   font-size: 13.5px;
 }
 
-kbd {
+/* :deep, because the <kbd> arrives through v-html on the empty-state note. */
+.empty :deep(kbd) {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--fill);
