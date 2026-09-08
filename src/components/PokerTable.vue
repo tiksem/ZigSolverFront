@@ -10,11 +10,21 @@
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import SeatPod from './SeatPod.vue'
 import PlayingCard from './PlayingCard.vue'
+import { tournamentFor } from '../lib/manualTournament'
 import { t, tv } from '../lib/i18n'
 
 const props = defineProps({
   hand: { type: Object, required: true },
+  /** The table these seats belong to — typed stats are kept per table. */
+  tableIndex: { type: Number, default: null },
 })
+/**
+ * `edit-stats`: a seat whose four HUD stats should be opened for typing.
+ * Villains only — the endpoint reads them to model the opponents, so the hero
+ * has none to type. `edit-tournament`: the header above the street, which
+ * belongs to the table rather than to any seat.
+ */
+const emit = defineEmits(['edit-stats', 'edit-tournament'])
 
 const fmt = (n, d = 1) =>
   n == null ? '—' : (Math.round(n * 10 ** d) / 10 ** d).toLocaleString()
@@ -137,13 +147,27 @@ const tourney = computed(() => {
   ]
   return rows
     .filter((r) => r.value != null)
-    .map((r) => ({
-      ...r,
-      label: t(`felt.${r.key}`),
-      title: t(`details.${r.key}`),
-      text: fmt(r.value),
-    }))
+    .map((r) => {
+      // Typed by hand, not reported by the client. It is in the snapshot either
+      // way — which is exactly why the two must not look like the same fact.
+      const typed = typedHeader.value[r.key] != null
+      return {
+        ...r,
+        typed,
+        label: t(`felt.${r.key}`),
+        title: typed ? t('tourney.typedTitle', { field: t(`details.${r.key}`) }) : t(`details.${r.key}`),
+        text: fmt(r.value),
+      }
+    })
 })
+
+/** What was typed for this table — the same lookup that put it in the body. */
+const typedHeader = computed(() =>
+  props.tableIndex !== null ? tournamentFor(props.tableIndex) || {} : {},
+)
+
+/** The header is the table's, so it is typeable wherever the table is known. */
+const canEditTourney = computed(() => props.tableIndex !== null)
 
 const boardSlots = computed(() => {
   const b = props.hand.board || []
@@ -156,11 +180,34 @@ const boardSlots = computed(() => {
     <div class="felt" :style="{ '--pod-seats': podScale }">
       <div class="rail" />
       <div class="center">
-        <div v-if="tourney.length" class="tourney">
-          <span v-for="row in tourney" :key="row.key" class="ti" :title="row.title">
+        <div v-if="tourney.length || canEditTourney" class="tourney">
+          <span
+            v-for="row in tourney"
+            :key="row.key"
+            class="ti"
+            :class="{ typed: row.typed }"
+            :title="row.title"
+          >
             <em>{{ row.label }}</em>
             <b class="tnum">{{ row.text }}<i v-if="row.bb">BB</i></b>
           </span>
+          <button
+            v-if="canEditTourney"
+            class="tedit"
+            :title="t('tourney.edit')"
+            @click="emit('edit-tournament')"
+          >
+            <svg v-if="tourney.length" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+              <path
+                d="M11.2 1.9 14.1 4.8 5.4 13.5 1.9 14.1 2.5 10.6z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>{{ tourney.length ? t('tourney.editShort') : t('tourney.add') }}</span>
+          </button>
         </div>
 
         <div class="street">{{ streetLabel }}</div>
@@ -196,6 +243,9 @@ const boardSlots = computed(() => {
             :seat="seat"
             :is-button="seat.name === hand.buttonName"
             :to-act="seat.toAct || (seat.isHero && hand.heroToAct)"
+            :table-index="tableIndex"
+            :editable="tableIndex !== null && !seat.isHero"
+            @edit="emit('edit-stats', seat)"
           />
         </div>
       </div>
@@ -244,8 +294,14 @@ const boardSlots = computed(() => {
 
 /* The tournament header. Above the street rather than out on the felt: the ring
    owns every edge of the oval, and a chip parked up there would sit under a pod
-   at some seat counts. */
+   at some seat counts.
+
+   Raised over the ring anyway, because at 2-4 seats a pod sits at top centre and
+   lands right on this row — which is survivable for three chips you only read,
+   and not for the one control up here that has to be found and clicked. */
 .tourney {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -284,6 +340,43 @@ const boardSlots = computed(() => {
   font-weight: 700;
   opacity: 0.6;
   margin-left: 2px;
+}
+
+/* Typed by hand rather than reported by the client — the same blue a typed stat
+   is marked in on the pods. */
+.ti.typed {
+  background: color-mix(in srgb, var(--blue) 46%, transparent);
+  border-color: color-mix(in srgb, var(--blue) 40%, transparent);
+}
+
+.ti.typed em {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* Dashed, like the pods' "+ stats", and for the same reason: it is the one
+   thing up here that is not a reading. Reads "+ tournament" on a table whose
+   client says nothing about the field, which is the case it exists for. */
+.tedit {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.tedit:hover {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
 }
 
 .street {

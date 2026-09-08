@@ -11,6 +11,11 @@
  * status line and lands in the activity list underneath. The ZigSolver URL is
  * probed with GET /health at the same time, so an unreachable API (or a missing
  * CORS header) is a message here rather than a surprise mid-hand.
+ *
+ * Under the macOS shell there is one field, not two: the solver is the process
+ * the app started and its endpoint is injected (lib/native.js). The /health
+ * probe still runs — it is how the startup of an embedded solver becomes
+ * visible — but there is nothing to type for it.
  */
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -23,13 +28,16 @@ import { useSocket } from '../lib/useSocket'
 import { health } from '../lib/zigsolver'
 import { noteServerInfo } from '../lib/settings'
 import { t } from '../lib/i18n'
+import { isNative, reportHost, openTableTab } from '../lib/native'
 import {
   INDEXES_TABLE_INDEX,
   MODE_HAND,
   serverInput,
   apiInput,
+  apiTokenInput,
   setServer,
   setApi,
+  setApiToken,
   socketUrl,
   apiUrl,
   displayHost,
@@ -40,6 +48,7 @@ const router = useRouter()
 
 const hostDraft = ref(serverInput.value)
 const apiDraft = ref(apiInput.value)
+const apiTokenDraft = ref(apiTokenInput.value)
 const connected = ref(false)
 const tables = ref([])
 const activity = ref([])
@@ -57,7 +66,9 @@ const showSettings = ref(false)
 
 const target = computed(() => (connected.value ? socketUrl(MODE_HAND, INDEXES_TABLE_INDEX) : null))
 const hostValid = computed(() => !!parseServer(hostDraft.value))
-const apiValid = computed(() => !!parseServer(apiDraft.value))
+// Under the shell the solver's endpoint came from the app, so it is valid by
+// construction and there is no second field to be waiting on.
+const apiValid = computed(() => isNative || !!parseServer(apiDraft.value))
 const canConnect = computed(() => hostValid.value && apiValid.value)
 
 const sock = useSocket({
@@ -124,6 +135,11 @@ function connect() {
   if (!canConnect.value) return
   setServer(hostDraft.value)
   setApi(apiDraft.value)
+  // Before probeApi() below, so the /health it sends already carries the token.
+  setApiToken(apiTokenDraft.value)
+  // The shell keeps its own copy, so the next launch opens on this host and
+  // its window can say where it is pointed before the page has loaded.
+  reportHost(hostDraft.value)
   tables.value = []
   activity.value = []
   connected.value = true
@@ -144,13 +160,25 @@ watch(serverInput, (v) => {
 watch(apiInput, (v) => {
   if (v !== apiDraft.value) apiDraft.value = v
 })
+watch(apiTokenInput, (v) => {
+  if (v !== apiTokenDraft.value) apiTokenDraft.value = v
+})
 
 // Coming back from a table view should not mean re-typing the endpoints.
 onMounted(() => {
   if (canConnect.value) connect()
 })
 
+/**
+ * A table opens in a TAB under the shell, and in this one otherwise.
+ *
+ * The list is worth keeping on screen — it is where the next table comes from,
+ * and it is the only thing that notices one appearing or going away — so in the
+ * app it stays in its own tab and each table gets another. `openTableTab`
+ * returns false in a browser, where a route change is the only thing there is.
+ */
 function openTable(index) {
+  if (isNative && openTableTab(index)) return
   router.push({ name: 'table', params: { index } })
 }
 
@@ -202,7 +230,7 @@ function openTable(index) {
             />
           </div>
 
-          <div class="field-block">
+          <div v-if="!isNative" class="field-block">
             <label class="eyebrow" for="api">{{ t('connect.api') }}</label>
             <input
               id="api"
@@ -218,6 +246,37 @@ function openTable(index) {
               @keydown.enter.prevent="connect"
             />
           </div>
+
+          <!-- Optional, and last: an API started with --auth-token refuses
+               every call without one, /health included, so this screen would
+               otherwise report a perfectly healthy solver as unreachable.
+               Left empty for an API that wants none, which is the LAN case. -->
+          <div v-if="!isNative" class="field-block">
+            <label class="eyebrow" for="apiToken">
+              {{ t('connect.apiToken') }}
+              <span class="optional">{{ t('connect.optional') }}</span>
+            </label>
+            <input
+              id="apiToken"
+              v-model="apiTokenDraft"
+              class="field"
+              type="password"
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+              :placeholder="t('connect.apiTokenPlaceholder')"
+              :disabled="connected"
+              @keydown.enter.prevent="connect"
+            />
+          </div>
+
+          <!-- The shell's solver: stated, not typed. It is this app's own
+               process on loopback and there is nothing to point elsewhere. -->
+          <div v-else class="field-block">
+            <span class="eyebrow">{{ t('connect.api') }}</span>
+            <p class="embedded">{{ t('connect.embedded') }}</p>
+          </div>
         </div>
 
         <div class="actions">
@@ -228,7 +287,7 @@ function openTable(index) {
             {{ t('connect.disconnect') }}
           </button>
           <span v-if="!canConnect && (hostDraft || apiDraft)" class="muted small">
-            {{ t('connect.bothRequired') }}
+            {{ isNative ? t('connect.hostRequired') : t('connect.bothRequired') }}
           </span>
         </div>
 
@@ -320,7 +379,9 @@ function openTable(index) {
       </section>
 
       <section v-else class="placeholder">
-        <p class="muted">{{ t('connect.placeholder') }}</p>
+        <p class="muted">
+          {{ isNative ? t('connect.placeholderNative') : t('connect.placeholder') }}
+        </p>
       </section>
 
       <RouterLink class="checklink card" to="/check">
@@ -397,6 +458,28 @@ function openTable(index) {
 
 .field-block .field {
   margin-top: 6px;
+}
+
+/* "optional" sits inside the label, so it has to shed the eyebrow's caps and
+   weight or it reads as part of the field's name. */
+.optional {
+  margin-left: 6px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.7;
+}
+
+/* The shell's solver line, where a browser has an input. Given the height of
+   the field it replaces so the Connect button does not move between the two. */
+.embedded {
+  display: flex;
+  align-items: center;
+  margin: 6px 0 0;
+  min-height: 38px;
+  color: var(--label-2);
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .hint {

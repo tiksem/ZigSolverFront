@@ -18,13 +18,16 @@ import {
 import {
   serverInput,
   apiInput,
+  apiTokenInput,
   setServer,
   setApi,
+  setApiToken,
   parseServer,
   apiUrl,
 } from '../lib/server'
 import { health } from '../lib/zigsolver'
 import { t } from '../lib/i18n'
+import { isNative } from '../lib/native'
 
 const emit = defineEmits(['close'])
 
@@ -253,12 +256,17 @@ function placeholder(key) {
         />
       </div>
 
+      <!-- Not a row under the shell: the solver is this app's own process on
+           loopback, and the endpoint arrives injected (lib/native.js). -->
       <div class="row col">
         <div class="lab">
           <strong>{{ t('settings.api') }}</strong>
-          <span class="desc">{{ t('settings.apiDesc') }}</span>
+          <span class="desc">
+            {{ isNative ? t('settings.apiEmbeddedDesc') : t('settings.apiDesc') }}
+          </span>
         </div>
         <input
+          v-if="!isNative"
           class="field"
           :class="{ bad: apiInput && !apiOk }"
           type="text"
@@ -267,6 +275,26 @@ function placeholder(key) {
           placeholder="localhost:8000"
           :value="apiInput"
           @change="setApi($event.target.value)"
+        />
+        <p v-else class="fixed">{{ apiInput }}</p>
+      </div>
+
+      <!-- Only where it can be typed. Under the shell the token is the app's
+           own, minted for the launch, and is not a setting. -->
+      <div v-if="!isNative" class="row col">
+        <div class="lab">
+          <strong>{{ t('settings.apiToken') }}</strong>
+          <span class="desc">{{ t('settings.apiTokenDesc') }}</span>
+        </div>
+        <input
+          class="field"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          autocapitalize="off"
+          :placeholder="t('settings.apiTokenPlaceholder')"
+          :value="apiTokenInput"
+          @change="setApiToken($event.target.value)"
         />
       </div>
     </section>
@@ -329,6 +357,16 @@ h4 {
   color: var(--label-2);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+/* An endpoint that is stated rather than typed (the shell's embedded solver):
+   the same monospace as the field it replaces, minus the affordance. */
+.fixed {
+  margin: 0;
+  color: var(--label-2);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  user-select: text;
 }
 
 /* :deep, because the descriptions arrive through v-html and their <code> tags

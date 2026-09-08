@@ -420,6 +420,32 @@ export function parseHandBody(body) {
   }
 }
 
+/**
+ * Which DECISION a snapshot is asking about, as a string two snapshots can be
+ * compared on: the street being played, the hero's cards, and how many actions
+ * the body has replayed to get here.
+ *
+ * Coarser than the body on purpose. The host re-reads the table on a timer and
+ * two reads of one decision routinely differ in bytes without differing in
+ * question — a name comes back with a different capital, a stack loses a digit,
+ * a HUD block appears. None of that is an action, and it is an ACTION that makes
+ * the spot a new one. So two snapshots with the same key are the same question
+ * however far their text has drifted apart, which is what lets a re-read be held
+ * against the answer already being computed rather than replacing it (see
+ * TableView's shielded solve).
+ *
+ * Null when the body has no hero cards to key on — nothing to compare, so
+ * nothing is treated as a repeat of it.
+ */
+export function decisionKey(parsed) {
+  if (!parsed || parsed.finished || !parsed.heroHand) return null
+  const acted = parsed.streetLog.reduce((n, s) => n + s.length, 0)
+  // Sorted: the two cards are one holding whichever order the client printed
+  // them in, and a read that swaps them is not a different question.
+  const held = [...parsed.heroHand].sort().join('')
+  return `${parsed.street}|${held}|${acted}`
+}
+
 /** Stat keys the endpoint actually reads, in the order worth showing first. */
 export const CORE_STATS = ['VPIP', 'PFR', '3BET', 'ATS']
 
@@ -460,4 +486,245 @@ export function isKnownStat(key) {
 
 export function isRatioStat(key) {
   return key === 'AF'
+}
+
+/** `VPIP=25%` — one stat line in the host's own format. `AF` is the ratio. */
+export function statLine(key, value) {
+  const n = Math.round(Number(value) * 10) / 10
+  return isRatioStat(key) ? `${key}=${n}` : `${key}=${n}%`
+}
+
+/**
+ * Write stats INTO a body, as if the host's HUD had carried them.
+ *
+ * `byName` is `{ 'Big Stack Bob': { VPIP: 31, PFR: 24 } }` — the values typed by
+ * hand (lib/manualStats). This runs BEFORE the snapshot is parsed, so there is
+ * one body from there on: what the felt draws, what the exploit gate counts and
+ * what /move is asked are the same text, and nothing downstream has to know a
+ * number was typed rather than read.
+ *
+ * Two rules, both of them "look like the host":
+ *
+ *   * a key the block already carries is REPLACED in place, so a typed value
+ *     beats the HUD's rather than arriving twice;
+ *   * a key it does not carry is added to that player's FIRST block only, above
+ *     `stack=` — which is where the host puts them, and the only block it puts
+ *     them in (later streets carry the action and the stack alone).
+ *
+ * Everything else is left byte for byte, including the header and the board
+ * lines. Line endings are normalized to whichever the body already uses, and
+ * only keys the endpoint actually reads (STAT_KEYS) are written at all — a key
+ * it has no coefficient for would be noise in a body it has to parse.
+ */
+export function writeStats(body, byName) {
+  const text = String(body)
+  if (!byName || !Object.keys(byName).length) return text
+
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const out = []
+  let block = []
+  let sawPlayer = false
+  const done = new Set()
+
+  const flush = () => {
+    if (!block.length) return
+    // The same test splitBody makes: a leading block with no `position=` is the
+    // tournament header, not a seat named after its first line.
+    if (!sawPlayer && !block.some((l) => /position\s*=/i.test(l))) out.push(...block)
+    else {
+      sawPlayer = true
+      out.push(...writeBlockStats(block, byName, done))
+    }
+    block = []
+  }
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    const low = trimmed.toLowerCase()
+    if (!trimmed || low.startsWith('board:') || low.startsWith('board ')) {
+      flush()
+      out.push(line)
+      continue
+    }
+    block.push(line)
+  }
+  flush()
+  return out.join(eol)
+}
+
+/* --- the tournament header ------------------------------------------------ */
+
+/** What the header carries, in the order the felt and the details pane list it. */
+export const TOURNAMENT_KEYS = ['playersLeft', 'playersPaid', 'averageStack']
+
+/**
+ * The same three in the order the HOST's own prose puts them
+ * (`781 players left, 78.9BB average stack, 92 players paid`).
+ *
+ * The parsers on both ends are regexes and do not care, so this is only about
+ * the body looking like one the client wrote — which is the same reason the
+ * typed stats go in above `stack=` rather than at the end of the block.
+ */
+export const TOURNAMENT_WRITE_ORDER = ['playersLeft', 'averageStack', 'playersPaid']
+
+/** The wordings parseHeader reads, with the NUMBER first — patched in place. */
+const TOURNAMENT_RE = {
+  playersLeft: /(\d[\d,]*)(\s*players?\s+left)/i,
+  playersPaid: /(\d[\d,]*)(\s*players?\s+paid)/i,
+  averageStack: /(\d+(?:\.\d+)?)(\s*BB\s+average)/i,
+}
+
+/** The fallback wording, where the number comes second (`average stack 41.2`). */
+const AVERAGE_STACK_ALT = /(average\s+stack[^\d]*)(\d+(?:\.\d+)?)/i
+
+/** The sentence the host opens a tournament snapshot with. */
+const HEADER_LEAD = 'This is online poker tournament'
+
+const readableNumber = (v) =>
+  v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
+
+/** Counts are whole; the average stack is a BB figure, to one decimal. */
+function tournamentNumber(key, value) {
+  const n = Number(value)
+  return key === 'averageStack' ? (Math.round(n * 10) / 10).toFixed(1) : String(Math.round(n))
+}
+
+/** `92 players paid` — one clause of the header, in the host's own words. */
+export function tournamentPhrase(key, value) {
+  const n = tournamentNumber(key, value)
+  if (key === 'averageStack') return `${n}BB average stack`
+  return `${n} players ${key === 'playersLeft' ? 'left' : 'paid'}`
+}
+
+/** The whole header line, for a body that arrived without one. */
+export function tournamentHeaderLine(values) {
+  const parts = TOURNAMENT_WRITE_ORDER.filter((k) => readableNumber(values?.[k])).map((k) =>
+    tournamentPhrase(k, values[k]),
+  )
+  return parts.length ? `${HEADER_LEAD}, ${parts.join(', ')}` : ''
+}
+
+/** Where the first player block starts — everything above it is the header. */
+function firstPlayerLine(lines) {
+  let blockStart = -1
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim()
+    const low = trimmed.toLowerCase()
+    if (!trimmed || low.startsWith('board:') || low.startsWith('board ')) {
+      blockStart = -1
+      continue
+    }
+    if (blockStart < 0) blockStart = i
+    if (/position\s*=/i.test(lines[i])) return blockStart
+  }
+  return lines.length
+}
+
+/**
+ * Rewrite the header prose so it says `values`.
+ *
+ * A clause the header already has is replaced where it stands — so a typed
+ * count beats the client's rather than arriving twice — and one it does not
+ * have is appended to the sentence, ahead of `Total pot` where there is one:
+ * that clause closes the host's line, and a phrase after it would read as part
+ * of the pot to a human and be one regex slip from reading that way here.
+ */
+function patchHeader(text, values, wanted) {
+  let out = text
+  const missing = []
+
+  for (const key of wanted) {
+    const re = TOURNAMENT_RE[key]
+    if (re.test(out)) {
+      out = out.replace(re, (m, num, tail) => `${tournamentNumber(key, values[key])}${tail}`)
+      continue
+    }
+    if (key === 'averageStack' && AVERAGE_STACK_ALT.test(out)) {
+      out = out.replace(AVERAGE_STACK_ALT, (m, head) => `${head}${tournamentNumber(key, values[key])}`)
+      continue
+    }
+    missing.push(tournamentPhrase(key, values[key]))
+  }
+  if (!missing.length) return out
+
+  const at = /total\s+pot/i.exec(out)
+  const cut = at ? at.index : out.length
+  const before = out.slice(0, cut)
+  // The whitespace ahead of `Total pot` is put back byte for byte: it is a line
+  // break whenever the host wrote the pot on its own line, and merging the two
+  // would be this function editing something it was not asked about.
+  const gap = /\s*$/.exec(before)[0]
+  const prose = before.slice(0, before.length - gap.length).replace(/[.,;]+$/, '')
+  const added = missing.join(', ')
+  const sentence = prose ? `${prose}, ${added}` : added
+  if (!at) return `${sentence}${gap}`
+  return `${sentence}.${gap || ' '}${out.slice(cut)}`
+}
+
+/**
+ * Write a tournament header INTO a body, as if the client had reported it.
+ *
+ * The counterpart of `writeStats`, and the same bargain: it runs BEFORE the
+ * parse, so from there on there is one body — the felt, the /move request and
+ * the failed-call capture all read the same text, and nothing downstream has to
+ * know a number was typed rather than read.
+ *
+ * It matters more than it looks. The endpoint prices a hand under ICM only when
+ * the header carries players left AND players paid, and only weighs the hero
+ * against a field when it also carries an average stack; a client that reports
+ * none of that is answered as a cash game at a pay jump.
+ */
+export function writeTournament(body, values) {
+  const text = String(body)
+  if (!looksLikeBody(text)) return text
+
+  const wanted = TOURNAMENT_WRITE_ORDER.filter((k) => readableNumber(values?.[k]))
+  if (!wanted.length) return text
+
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const lines = text.split(/\r?\n/)
+  const at = firstPlayerLine(lines)
+  const header = lines.slice(0, at)
+
+  // No header at all: the whole sentence is ours, blank line and all, which is
+  // the shape the host's own snapshot has.
+  if (!header.some((l) => l.trim())) {
+    return [tournamentHeaderLine(values), '', ...lines.slice(at)].join(eol)
+  }
+
+  const patched = patchHeader(header.join('\n'), values, wanted).split('\n')
+  return [...patched, ...lines.slice(at)].join(eol)
+}
+
+function writeBlockStats(block, byName, done) {
+  const name = block[0].trim()
+  const stats = byName[name]
+  if (!stats) return block
+
+  // Null and '' are "leave this one to the HUD", not zero — and Number() reads
+  // both of them as 0, so they are dropped before it gets a look.
+  const wanted = STAT_KEYS.filter((k) => {
+    const v = stats[k]
+    return v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
+  })
+  if (!wanted.length) return block
+
+  const missing = new Set(wanted)
+  const lines = block.map((line) => {
+    const eq = line.indexOf('=')
+    if (eq < 0) return line
+    const key = line.slice(0, eq).trim().toUpperCase()
+    if (!missing.has(key)) return line
+    missing.delete(key)
+    return statLine(key, stats[key])
+  })
+
+  if (missing.size && !done.has(name)) {
+    const added = wanted.filter((k) => missing.has(k)).map((k) => statLine(k, stats[k]))
+    const at = lines.findIndex((l) => /^\s*stack\s*=/i.test(l))
+    if (at < 0) lines.push(...added)
+    else lines.splice(at, 0, ...added)
+  }
+  done.add(name)
+  return lines
 }

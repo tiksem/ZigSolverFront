@@ -49,7 +49,8 @@ seats** are drawn (9-max is the client's largest ring).
 A frame carrying a `position=` line is parsed as a snapshot
 ([handBody.js](src/lib/handBody.js), a port of ZigSolver's
 `api/handhistory.py`) and drawn as a felt: seats around an oval with the hero at
-the bottom, each with position, stack behind, HUD stats, the action it took **on
+the bottom, each with position, stack behind, HUD stats (typeable — see below),
+the action it took **on
 the street being played**, and the chips it has in front this street. Blinds are
 posted the way the solver's own replay posts them, so a limped pot shows the 1BB
 it actually contains. The centre carries the board, the authoritative header pot
@@ -112,6 +113,78 @@ folding is `0` by construction and every other number is read against it.
 **Support** is the share of real play the size models saw at that size; a
 winning branch under ~2% is one the models are extrapolating on, and the panel
 flags it.
+
+## Typing the stats the HUD does not carry
+
+Every stat the snapshot does not carry is **imputed from the population** on the
+solver side, so a villain the HUD says nothing about is answered as the average
+player — and those four numbers are not decoration: the preflop chart's widths
+are bent by the opponents' VPIP / PFR / ATS / 3BET, and the exploit models are
+fitted on them. A fresh table, an anonymising client or a villain the tracker
+has never seen is exactly the spot where you know more than the body does.
+
+So the pod takes them. The **✎** on a villain's stat row (a dashed **+ stats**
+where the HUD carried none) opens the four fields; anything typed is **written
+into the snapshot in the host's own format** — `VPIP=41%`, above `stack=`, where
+the client would have put it — **before that snapshot is parsed**.
+
+That last part is the whole design. There is one body from there on, so the
+felt, the exploit gate, the `/move` request and the failed-call capture all read
+the same text and nothing downstream has to know a number was typed. What the
+editor's footer shows is the lines themselves.
+
+Four details:
+
+* **A typed value is marked blue on the felt.** It is in the snapshot either
+  way, which is precisely why it must not look like something the client read.
+* **An empty field is not a zero.** It is the HUD's own value where there is one
+  — which the placeholder shows — and the population average where there is not.
+  Only filled fields are written, so PFR can be left alone while ATS is typed.
+* **Kept per table**, under the name the body carries. Clients that anonymise
+  ("Player 3") reuse the same handful of names at every table, and a global map
+  would put one table's read on another table's stranger.
+* **It re-asks under a new `handId`.** The cached tree was solved on ranges bent
+  by stats the body no longer carries, so typing one is a different question
+  about the same hand rather than a cache hit on the old answer. The re-solve
+  fires when the editor is closed, not on every keystroke.
+
+The hero has no fields: the endpoint reads these to model the *opponents*.
+
+## Typing the tournament header
+
+The other thing a client leaves out is the tournament itself. The snapshot's
+header is prose — `781 players left, 78.9BB average stack, 92 players paid` —
+and it is not decoration either: the endpoint prices a hand **under ICM only
+when the body carries players left AND players paid**, and it can only weigh the
+hero against a field when it also carries an **average stack**
+(`api/move.py::_tournament_data`). A snapshot with none of that is answered as a
+cash game — which on the bubble is the wrong question rather than a slightly
+worse answer, since folding is worth more there than the chips say.
+
+Plenty of hosts never report it. The lobby has it on screen, the extractor reads
+the felt, and you can see both. So the **✎ on the header chips** — a dashed
+**+ tournament** where the client reported none — takes the three numbers, and
+they are **written into the header in the host's own prose** before the snapshot
+is parsed.
+
+It is the same machinery as the typed stats, so the same four things hold: one
+body downstream, a typed value marked blue on the felt, an empty field meaning
+the host's own value rather than a zero, and a re-solve under a new `handId`
+when the editor closes — the cached tree was priced in chips, and asking again
+under a pay ladder is a different question about the same hand.
+
+Two details of the writing:
+
+* **A clause the header already has is replaced where it stands**, so a typed
+  count beats the client's rather than arriving twice, and one it does not have
+  is appended to the sentence — ahead of `Total pot`, which closes the host's
+  line. A body with no header at all gets the whole line, opener included.
+* **Kept per table**, because two tables are two tournaments at different stages
+  of different fields.
+
+The sheet says which of the two answers the header currently buys, counting the
+host's own values and yours together: both counts and an average stack is ICM,
+anything less is chips.
 
 ## Cancelling superseded solves
 
@@ -188,11 +261,15 @@ node mock/server.js 8080 8000
 ```
 
 Dependency-free (the WebSocket handshake and framing are done by hand). It
-serves `Indexes: 0,1,3,7,9`; table **0** is a 3-way 6-max flop decision, table
+serves `Indexes: 0,1,3,5,7,9`; table **0** is a 3-way 6-max flop decision whose
+SB carries no HUD stats at all (the seat to try typing some into), table
 **1** a 6-max pot that is heads-up from the flop (the one shape the Exploit
 regime covers, so it is the table to point at for that and for Manual), table
-**3** a heads-up preflop chart answer, table **7** a body the endpoint refuses,
-table **9** a full 9-max ring. The fake
+**3** a heads-up preflop chart answer, table **5** the same heads-up hand on the
+river facing a bet (a river root is solved with the wider raise menu — 50/75/100%
+of pot — so it is the longest action list the panel has to draw), table **7** a
+body the endpoint refuses, table **9** a full 9-max ring whose header carries
+the pot and nothing about the tournament (the table to try typing one into). The fake
 `/move` takes 2.5s so cancellation is observable, implements `/cancel` and
 supersede-on-reuse like the real one, and answers both regimes — the exploit one
 with EVs and support, so the panel's second column set is exercised. Both hosts
@@ -200,7 +277,7 @@ carry the failed-call capture path: `GET /image/N` serves a stand-in screenshot
 (a felt with the table number on it, drawn by [fakebot/png.js](fakebot/png.js)),
 and the fake `/screenError` logs what it was posted instead of storing it.
 
-Those four snapshots never move, and the answers are canned. To point the app at
+Those snapshots never move, and the answers are canned. To point the app at
 the **real solver** and still not need a poker client, there is
 [fakebot/](fakebot/): a bot host with a game behind it — cards, blinds, a button
 that moves, villains acting to their own persona, streets, showdowns, stacks
@@ -236,6 +313,8 @@ src/
               moveResult.js answer normalizer + action sampling
               settings.js   persisted solve settings
               regime.js     gto|exploit|manual, and where exploit applies
+              manualStats.js the four HUD stats, typed by hand
+              manualTournament.js the tournament header, typed by hand
               notify.js     transient notifications
               solvers.js    what each solver regime means
               screenError.js the failed-call screen capture
@@ -243,7 +322,7 @@ src/
               useSocket.js  reconnecting WebSocket composable
   components/ PokerTable · SeatPod · PlayingCard · SolverPanel
               RegimeBar · RegimePrompt · HandDetails · SettingsSheet
-              InfoSheet · HelpButton
+              SeatStatsSheet · TournamentSheet · InfoSheet · HelpButton
               MessageDock · NotificationStack · AppNav · StatusDot
   views/      ConnectView · TableView · CheckView
 mock/         the two hosts as fixed snapshots

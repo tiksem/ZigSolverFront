@@ -8,6 +8,7 @@
 
 import { reactive, ref, watch } from 'vue'
 import { readStored, writeStored } from './persist'
+import { noteHealth } from './preflop'
 
 const KEY = 'zigsolver.settings'
 
@@ -36,8 +37,10 @@ export const DEFAULTS = {
   // --- flop solve quality (null = whatever the API's own default is) --------
   // The three numbers the flop regime ladder runs on. All FLOP ONLY: turn and
   // river are solved as their own street at the widest sizing grid, with no
-  // ladder and no floor. The API publishes its defaults and accepted ranges on
-  // /health.solveTuning, which is what the sheet shows as the placeholder.
+  // ladder and no floor (a RIVER root also widens its raise menu to 50/75/100%
+  // of pot — /health.streetSolveAbstraction.riverRootRaises). The API publishes
+  // its defaults and accepted ranges on /health.solveTuning, which is what the
+  // sheet shows as the placeholder.
 
   /** `gateExploitability` — % of pot. An exact regime is preferred to the
    *  net-truncated flow when its PREDICTED exploitability is at or under this.
@@ -123,6 +126,9 @@ export const serverTuning = ref(null)
 /** Feed a /health payload in (ConnectView probes it; the sheet re-reads it). */
 export function noteServerInfo(info) {
   serverTuning.value = (info && info.solveTuning) || null
+  // Which preflop engines the server can actually answer with. Fanned out from
+  // here because this is already the one place a /health payload arrives.
+  noteHealth(info)
 }
 
 /** The server's default for `key`, as a string for a placeholder, or null. */

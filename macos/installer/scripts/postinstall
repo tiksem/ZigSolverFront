@@ -1,0 +1,35 @@
+#!/bin/bash
+# Run by Installer as root once the payload is on disk.
+#
+# Thin on purpose: the work is in runtime/provision.sh, which ships with the
+# runtime and stays runnable afterwards.  A provisioning step that only exists
+# inside a package is one you cannot re-run when the network drops halfway
+# through the torch download — and that is the failure that actually happens.
+#
+#   $1  the package path      $2  the install destination
+#   $3  the target volume     $4  the root of the system
+set -uo pipefail
+
+VOLUME=${3:-/}
+ROOT="${VOLUME%/}/Library/Application Support/ZigSolver"
+PROVISION="$ROOT/runtime/provision.sh"
+
+echo "[postinstall] ZigSolver -> $ROOT"
+
+if [[ ! -x "$PROVISION" ]]; then
+    echo "[postinstall] $PROVISION is missing — the package is incomplete" >&2
+    exit 1
+fi
+
+# Its exit status is ours: a machine where the solver cannot start should not
+# report a successful installation, and re-running the installer retries.
+"$PROVISION" "$ROOT"
+status=$?
+
+if [[ $status -ne 0 ]]; then
+    echo "[postinstall] provisioning failed (status $status)." >&2
+    echo "[postinstall] The whole transcript is in $ROOT/install.log" >&2
+    echo "[postinstall] Fix what it names and run:" >&2
+    echo "[postinstall]   sudo '$PROVISION'" >&2
+fi
+exit $status

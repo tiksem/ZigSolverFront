@@ -59,9 +59,14 @@ export default {
       'straight to the ZigSolver API, and its answer is what you read.',
     botHost: 'Bot host',
     api: 'ZigSolver API',
+    apiToken: 'API token',
+    apiTokenPlaceholder: 'only if the API requires one',
+    optional: 'optional',
     connect: 'Connect',
     disconnect: 'Disconnect',
     bothRequired: 'Both hosts are required.',
+    hostRequired: 'A bot host is required.',
+    embedded: 'Embedded — started by this app, on loopback.',
     checking: 'Checking…',
     apiLine: 'ZigSolver: {text}',
     turnNetOn: 'turn net on ({device})',
@@ -80,6 +85,7 @@ export default {
     toggleAllBots: 'Toggle all bots',
     autoEnableBots: 'Auto-enable bots',
     placeholder: 'Enter both hosts above to see the tables the bot is running.',
+    placeholderNative: 'Enter the bot host above to see the tables it is running.',
     checkLink: 'Screenshot check',
     checkLinkSub: 'Run a screenshot through the extractor, or crop a region.',
     hostMessages: 'Host messages',
@@ -106,6 +112,58 @@ export default {
     dropped: 'Not connected — command dropped',
     screenCaptured: 'Screen saved to the API for this failure',
     hostMessages: 'Host messages',
+  },
+
+  // --- the preflop engine picker -----------------------------------------
+  preflopBar: {
+    heading: 'Preflop',
+    note: 'which engine plays the hand before the flop',
+    noService: 'The blueprint service is not configured on this API — preflop is played by the algorithm.',
+    drew: 'This hand drew {engine}.',
+    forced: 'The blueprint was drawn, but {reason} — played by the algorithm.',
+  },
+
+  preflopMix: {
+    title: 'Advanced preflop',
+    subtitle: 'How each hand picks its preflop engine',
+    mix: 'Mix',
+    mixDesc:
+      'One coin per hand, thrown on its first preflop decision and kept for the rest of the ' +
+      'preflop. The percentage is how often the blueprint wins the toss — not a blend of the ' +
+      'two answers.',
+    sliderLabel: 'Share of hands played by the blueprint',
+  },
+
+  // --- the three preflop engines -----------------------------------------
+  preflop: {
+    alg: {
+      short: 'Alg',
+      title: 'Algorithm',
+      tagline: 'The chart, bent by the opponents\u2019 stats',
+      detail:
+        'Preflop ranges from rangegen: a fast heuristic keyed on position, stack depth and the ' +
+        'table\u2019s measured tendencies. It answers every spot instantly and never declines one, ' +
+        'which is why it is the default and the fallback.',
+    },
+    gto: {
+      short: 'GTO',
+      title: 'Blueprint',
+      tagline: 'An exact solve of the actual game',
+      detail:
+        'A presolved equilibrium looked up from the blueprint grid: the real game for this table ' +
+        'size, stack depth and tournament pressure, solved exactly rather than approximated. ' +
+        'Where the grid does not cover a spot the answer falls back to the algorithm and says so.',
+    },
+    advanced: {
+      short: 'Advanced',
+      title: 'Advanced preflop',
+      tagline: 'Draw one per hand at a mix you set',
+      detail:
+        'Neither engine outright — a coin thrown once per hand, on its first preflop decision, ' +
+        'at the mix you set. The whole preflop of that hand is then played by whichever won: ' +
+        'opening off the blueprint and facing the 3-bet off the chart would be a line neither ' +
+        'engine would have played.',
+    },
   },
 
   // --- the regime picker -------------------------------------------------
@@ -152,6 +210,7 @@ export default {
   reason: {
     headsUpTable: 'a two-handed table is outside the models’ training data',
     multiwayFlop: 'the flop was {count}-way and the models are heads-up postflop',
+    noPreflopService: 'this API has no blueprint service configured',
     noStats: 'the HUD carries no stats on the villain',
     fewStats: {
       one: 'the HUD carries only {count} stat on the villain',
@@ -383,7 +442,9 @@ export default {
       'When a newer snapshot arrives, <code>POST /cancel</code> kills the one still running: it ' +
       'SIGKILLs the solver subprocess and frees the solve semaphore, so the answer you do want ' +
       'is not queued behind one you do not. Off, the old solve runs to completion and its answer ' +
-      'is discarded on arrival.',
+      'is discarded on arrival. A newer READ of the decision already being solved — same street, ' +
+      'same cards, no new action — never supersedes it either way: it goes out alongside, so a ' +
+      'misread cannot cost you an answer that was on its way.',
     cache: 'Per-hand tree cache',
     cacheDesc:
       '<code>handId</code> — keys the solved tree to this hand, so the next street and any ' +
@@ -407,7 +468,10 @@ export default {
     qualityNote:
       'The three numbers the flop regime ladder runs on. Leave a field empty to use the API’s ' +
       'own default (shown greyed). Flop only — turn and river are always solved as their own ' +
-      'street at the widest sizing grid.',
+      'street at the widest sizing grid. A hand that reaches the river is solved with a wider ' +
+      'raise menu on top of that (50 / 75 / 100% of pot, plus all-in): nothing follows the ' +
+      'river, so the extra sizes are nearly free there — inside a flop or turn tree they would ' +
+      'not be.',
     gate: 'Solve exactly when it beats',
     gateDesc:
       '<code>gateExploitability</code> — % of pot. Before choosing, the balancer predicts how ' +
@@ -432,6 +496,15 @@ export default {
     botHostDesc: 'The runner’s WebSocket, and the screenshot check upload.',
     api: 'ZigSolver API',
     apiDesc: 'Where snapshots are POSTed. Changing it applies to the next solve.',
+    apiEmbeddedDesc:
+      'The solver this app started, on loopback and behind a token minted for ' +
+      'this launch. Nothing else on the machine can reach it, and there is no ' +
+      'other one to point at.',
+    apiToken: 'API token',
+    apiTokenDesc:
+      'Sent as “Authorization: Bearer …” with every call. Needed only for an ' +
+      'API started with --auth-token; leave it empty otherwise.',
+    apiTokenPlaceholder: 'only if the API requires one',
     reset: 'Reset solve settings',
   },
 
@@ -571,6 +644,56 @@ export default {
   },
 
   // --- HUD stat names ----------------------------------------------------
+  // --- the four stats, typed by hand --------------------------------------
+  stats: {
+    edit: 'Type stats by hand',
+    add: '+ stats',
+    typedTitle: '{stat} — typed by hand, not read off the table',
+    title: 'Stats: {name}',
+    subtitle: '{position} at table {index} — kept under the name the snapshot carries',
+    lede:
+      'Every stat the snapshot does not carry is imputed from the population, so a villain the ' +
+      'HUD says nothing about is answered as the average player. What you type here is written ' +
+      'into the snapshot the way the host writes it, and the solver reads it exactly as it reads ' +
+      'the client’s own.',
+    imputed: 'imputed',
+    writes: 'Written into every snapshot',
+    noneTyped: 'Nothing typed — this seat goes out as the host wrote it.',
+    clear: 'Clear typed stats',
+  },
+
+  // --- the tournament header, typed by hand ------------------------------
+  tourney: {
+    edit: 'Type the tournament header by hand',
+    add: '+ tournament',
+    // On the chip beside the header it has to be findable at a glance, and the
+    // three chips next to it have already said what the numbers are.
+    editShort: 'Tournament',
+    typedTitle: '{field} — typed by hand, not read off the table',
+    title: 'Tournament header',
+    subtitle: 'Table {index} — written into every snapshot this table sends',
+    lede:
+      'The three numbers the header carries are what turn a chip answer into a money one. A ' +
+      'client that does not report them is answered as a cash game, at a pay jump where folding ' +
+      'is worth more than the chips say. What you type here is written into the header the way ' +
+      'the host writes it, and the solver reads it exactly as it reads the client’s own.',
+    desc: {
+      playersLeft: 'Runners still in the tournament',
+      playersPaid: 'How many places the payout ladder covers',
+      averageStack: 'What the field averages, in big blinds',
+    },
+    absent: 'absent',
+    needBoth:
+      'Players left and players paid are both needed before the solver prices anything under ' +
+      'ICM — with one of them the answer comes back in chips.',
+    needAverage:
+      'Without an average stack the answer comes back in chips: the payout ladder has no field ' +
+      'to weigh the hero against.',
+    icm: 'The header is complete — this table’s answers are priced under ICM.',
+    writes: 'Written into every snapshot',
+    noneTyped: 'Nothing typed — the header goes out as the host wrote it.',
+    clear: 'Clear typed header',
+  },
   stat: {
     VPIP: 'Voluntarily put money in pot',
     PFR: 'Preflop raise',

@@ -28,7 +28,7 @@ const BOT_PORT = Number(process.argv[2] || 8080)
 const API_PORT = Number(process.argv[3] || 8000)
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const INDEXES_TABLE_INDEX = 96782
-const TABLES = [0, 1, 3, 7, 9]
+const TABLES = [0, 1, 3, 5, 7, 9]
 
 /** How long a fake solve takes, so an aborted one is visible in the log. */
 const SOLVE_MS = 2500
@@ -68,8 +68,6 @@ stack=54.0BB
 Sasha M
 position=SB
 fold
-VPIP=42%
-PFR=12%
 stack=61.7BB
 
 Big Stack Bob
@@ -209,8 +207,15 @@ hand=A♠K♦
 stack=52.8BB
 `
 
-/** Table 9: a full 9-max ring, the largest table the client deals. */
-const SNAPSHOT_9MAX = `This is online poker tournament, 214 players left, 41.2BB average stack, 40 players paid. Total pot 12.5BB
+/**
+ * Table 9: a full 9-max ring, the largest table the client deals.
+ *
+ * Its header carries the pot and NOTHING about the tournament — the client
+ * plenty of hosts have, which reads the felt and not the lobby. It is the table
+ * to try typing a header into: with none the answer is priced in chips, and
+ * players left / players paid / average stack are what buy an ICM one.
+ */
+const SNAPSHOT_9MAX = `Total pot 12.5BB
 
 Ivan P
 position=UTG
@@ -302,6 +307,83 @@ hand=8♦8♣
 stack=45.2BB
 `
 
+/**
+ * Table 5: the same heads-up hand carried to the river, hero facing a bet.
+ *
+ * The one street whose answer has a shape of its own — a river-rooted solve
+ * carries the wider raise menu (50/75/100% of pot), so this is what the panel's
+ * longest action list is developed against.
+ */
+const SNAPSHOT_HU_RIVER = `This is online poker tournament, 412 players left, 61.0BB average stack, 45 players paid. Total pot 20.7BB
+
+*me*
+position=CO
+raise 2.3BB
+VPIP=24%
+PFR=20%
+3BET=9%
+ATS=42%
+hand=A♦J♦
+stack=60.0BB
+
+Big Stack Bob
+position=BB
+call
+VPIP=41%
+PFR=11%
+3BET=4%
+ATS=20%
+Flop Fold to C-BET=45%
+WTSD=38%
+AF=1.0
+statHands=1500
+stack=60.0BB
+
+Board: K♠ 8♦ 3♦
+
+Big Stack Bob
+position=BB
+check
+stack=57.7BB
+
+*me*
+position=CO
+bet 2.1BB
+hand=A♦J♦
+stack=55.6BB
+
+Big Stack Bob
+position=BB
+call
+stack=55.6BB
+
+Board: K♠ 8♦ 3♦ 7♣
+
+Big Stack Bob
+position=BB
+check
+stack=55.6BB
+
+*me*
+position=CO
+check
+hand=A♦J♦
+stack=55.6BB
+
+Board: K♠ 8♦ 3♦ 7♣ 2♥
+
+Big Stack Bob
+position=BB
+bet 4.1BB
+stack=51.5BB
+
+*me*
+position=CO
+waiting
+hand=A♦J♦
+stack=55.6BB
+`
+
 /** Table 7 sends a body the endpoint refuses, to exercise the error path. */
 const SNAPSHOT_BAD = `Total pot 1.5BB
 
@@ -345,6 +427,47 @@ const GTO_ACTIONS = [
   { action: 'call(4.1BB)', probability: 0.5218 },
   { action: 'raise 60%(14.2BB)', probability: 0.2451 },
   { action: 'all-in(85.7BB)', probability: 0.0427 },
+]
+
+/**
+ * Table 1, checked to on the turn: the full BET menu, which no other fixture
+ * shows — every other list here is a raise menu facing a bet.
+ *
+ * Six sizings, not four. The API has always published a 33/50/75/100/125/150
+ * grid for a turn or river solved as its own street, but until 2026-08-24 the
+ * solve ABI carried four sizing slots per street and silently dropped the tail,
+ * so a real answer stopped at 100% of pot. The cap is six now and the whole
+ * grid reaches the tree.
+ *
+ * Percent of table 1's 12.4BB pot, all six clear of the 67%-of-stack snap that
+ * would fold the big ones into the shove. Eight rows — the longest list the
+ * panel has to lay out.
+ */
+const GTO_ACTIONS_TURN = [
+  { action: 'check', probability: 0.4013 },
+  { action: 'bet 33%(4.1BB)', probability: 0.2015 },
+  { action: 'bet 50%(6.2BB)', probability: 0.1402 },
+  { action: 'bet 75%(9.3BB)', probability: 0.1108 },
+  { action: 'bet 100%(12.4BB)', probability: 0.0704 },
+  { action: 'bet 125%(15.5BB)', probability: 0.0402 },
+  { action: 'bet 150%(18.6BB)', probability: 0.0231 },
+  { action: 'all-in(55.6BB)', probability: 0.0125 },
+]
+
+/**
+ * The river fans out where the earlier streets do not: a river-rooted solve
+ * carries the wider raise menu (50/75/100% of pot on top of all-in), because
+ * nothing follows the river and the extra sizes are nearly free there. Kept as
+ * its own list — with table 5's own pot and stacks — so the panel is developed
+ * against the widest action list the API can actually return.
+ */
+const GTO_ACTIONS_RIVER = [
+  { action: 'fold', probability: 0.4108 },
+  { action: 'call(4.1BB)', probability: 0.4627 },
+  { action: 'raise 50%(14.5BB)', probability: 0.0611 },
+  { action: 'raise 75%(19.6BB)', probability: 0.0388 },
+  { action: 'raise 100%(24.8BB)', probability: 0.019 },
+  { action: 'all-in(55.6BB)', probability: 0.0076 },
 ]
 
 // Ranked by EV, best first — the calculator's own output order.
@@ -402,6 +525,88 @@ const answerFor = (req) => {
             'raise-size model exists',
           "villain's raise mass is scored as a call at the raise cap (max_raises=1)",
         ],
+      },
+    }
+  }
+  // Checked to on the turn: nothing is owed, so the answer is a bet menu at the
+  // full six-sizing street grid — the longest list the panel ever lays out.
+  // Like the river below, no regime ladder applies (`flow` is the exact solve).
+  if (street === 'turn') {
+    return {
+      actions: GTO_ACTIONS_TURN,
+      regime: 'gto',
+      regimeRequested: asked,
+      solver: 'exact',
+      street,
+      hand: 'AdJd',
+      responseTime: +(SOLVE_MS / 1000).toFixed(3),
+      meta: {
+        flow: 'exact',
+        cached: null,
+        board: 'Ks 8d 3d 7c',
+        actingSeat: 'ip',
+        seats: { ip: "'*me*' (CO)", oop: "'Big Stack Bob' (BB)" },
+        potBB: 12.4,
+        // Checked to, so there is nothing to call — the field the panel uses to
+        // tell a bet menu from a raise menu.
+        toCallBB: null,
+        solveSeconds: SOLVE_MS / 1000,
+        // Flop-only: nothing prices a turn or river street solve in advance.
+        predictedSolveSeconds: null,
+        // The nut flush draw, ace-high, on a king-high board: every sizing is a
+        // semi-bluff until the biggest two, which are pricing out the hand's own
+        // equity, and the check is the give-up that keeps the pot small.
+        handDecisions: {
+          check: 'give_up_check',
+          'bet 33%(4.1BB)': 'semi_bluff',
+          'bet 50%(6.2BB)': 'semi_bluff',
+          'bet 75%(9.3BB)': 'semi_bluff',
+          'bet 100%(12.4BB)': 'semi_bluff',
+          'bet 125%(15.5BB)': 'bluff',
+          'bet 150%(18.6BB)': 'bluff',
+          'all-in(55.6BB)': 'bluff',
+        },
+        warnings: [],
+      },
+    }
+  }
+  // A river root is solved with the wider raise menu, so it is the one street
+  // whose answer has a different shape — and the flop regime ladder does not
+  // apply to it either (`flow` is always the plain exact solve).
+  const onRiver = street === 'river'
+  if (onRiver) {
+    return {
+      actions: GTO_ACTIONS_RIVER,
+      regime: 'gto',
+      regimeRequested: asked,
+      // Always the plain exact solve: the regime ladder `flowFor` models is
+      // flop-only, and a river root is small enough to solve outright.
+      solver: 'exact',
+      street,
+      hand: 'AdJd',
+      responseTime: +(SOLVE_MS / 1000).toFixed(3),
+      meta: {
+        flow: 'exact',
+        cached: null,
+        board: 'Ks 8d 3d 7c 2h',
+        actingSeat: 'ip',
+        seats: { ip: "'*me*' (CO)", oop: "'Big Stack Bob' (BB)" },
+        potBB: 20.7,
+        toCallBB: 4.1,
+        solveSeconds: SOLVE_MS / 1000,
+        // Flop-only: nothing prices a turn or river street solve in advance.
+        predictedSolveSeconds: null,
+        // A busted flush draw with ace-high: every raise branch is a bluff, and
+        // the call is the showdown value the ace still has.
+        handDecisions: {
+          fold: 'give_up_fold',
+          'call(4.1BB)': 'bluff_catch',
+          'raise 50%(14.5BB)': 'bluff',
+          'raise 75%(19.6BB)': 'bluff',
+          'raise 100%(24.8BB)': 'bluff_raise',
+          'all-in(55.6BB)': 'bluff_raise',
+        },
+        warnings: [],
       },
     }
   }
@@ -585,9 +790,11 @@ bot.on('upgrade', (req, socket) => {
         ? SNAPSHOT_HU_FLOP
         : i === 3
           ? SNAPSHOT_HU
-          : i === 9
-            ? SNAPSHOT_9MAX
-            : SNAPSHOT_BAD
+          : i === 5
+            ? SNAPSHOT_HU_RIVER
+            : i === 9
+              ? SNAPSHOT_9MAX
+              : SNAPSHOT_BAD
 
   if (tableIndex === INDEXES_TABLE_INDEX) {
     send(`Indexes: ${TABLES.join(',')}`)

@@ -2,13 +2,19 @@
 import { computed } from 'vue'
 import PlayingCard from './PlayingCard.vue'
 import { CORE_STATS } from '../lib/handBody'
+import { statsFor } from '../lib/manualStats'
 import { t } from '../lib/i18n'
 
 const props = defineProps({
   seat: { type: Object, required: true },
   isButton: { type: Boolean, default: false },
   toAct: { type: Boolean, default: false },
+  /** Which table's typed stats these are — they are kept per table. */
+  tableIndex: { type: Number, default: null },
+  /** Whether this seat's stats can be typed by hand (villains only). */
+  editable: { type: Boolean, default: false },
 })
+const emit = defineEmits(['edit'])
 
 const fmt = (n, d = 1) =>
   n == null ? '—' : (Math.round(n * 10 ** d) / 10 ** d).toLocaleString()
@@ -39,13 +45,24 @@ const action = computed(() => {
   }
 })
 
-const stats = computed(() => {
-  const out = []
-  for (const key of CORE_STATS) {
-    if (props.seat.stats[key] != null) out.push([key, props.seat.stats[key]])
-  }
-  return out
-})
+/** What was typed for this seat — the same lookup that put it in the body. */
+const typed = computed(() =>
+  props.editable ? statsFor(props.tableIndex, props.seat.name) || {} : {},
+)
+
+/**
+ * The four the HUD leads with. A typed one is marked: it is already in the
+ * snapshot by the time this draws, and "what the client read" and "what I told
+ * it" should never look like the same fact.
+ */
+const stats = computed(() =>
+  CORE_STATS.filter((key) => props.seat.stats[key] != null).map((key) => ({
+    key,
+    short: key === '3BET' ? '3B' : key,
+    value: props.seat.stats[key],
+    typed: typed.value[key] != null,
+  })),
+)
 
 const extraStatCount = computed(
   () => Object.keys(props.seat.stats).length - stats.value.length,
@@ -80,11 +97,29 @@ const extraStatCount = computed(
       <PlayingCard v-for="c in seat.hand" :key="c" :card="c" size="sm" />
     </div>
 
-    <div v-if="stats.length" class="stats">
-      <span v-for="[key, value] in stats" :key="key" class="stat" :title="key">
-        <b class="tnum">{{ fmt(value, 0) }}</b><i>{{ key === '3BET' ? '3B' : key }}</i>
+    <div v-if="stats.length || editable" class="stats">
+      <span
+        v-for="s in stats"
+        :key="s.key"
+        class="stat"
+        :class="{ typed: s.typed }"
+        :title="s.typed ? t('stats.typedTitle', { stat: s.key }) : s.key"
+      >
+        <b class="tnum">{{ fmt(s.value, 0) }}</b><i>{{ s.short }}</i>
       </span>
       <span v-if="extraStatCount > 0" class="more">+{{ extraStatCount }}</span>
+      <button v-if="editable" class="edit" :title="t('stats.edit')" @click="emit('edit')">
+        <span v-if="!stats.length">{{ t('stats.add') }}</span>
+        <svg v-else viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+          <path
+            d="M11.2 1.9 14.1 4.8 5.4 13.5 1.9 14.1 2.5 10.6z"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
     </div>
 
     <div v-if="action" class="action" :class="action.tone">{{ action.text }}</div>
@@ -243,6 +278,17 @@ const extraStatCount = computed(
   font-weight: 600;
 }
 
+/* Typed by hand, not read by the client — the same blue the editor marks a
+   filled field in. It is in the snapshot either way, which is exactly why the
+   two must not look alike. */
+.stat.typed {
+  background: color-mix(in srgb, var(--blue) 46%, transparent);
+}
+
+.stat.typed i {
+  color: rgba(255, 255, 255, 0.72);
+}
+
 .more {
   padding: 1px 5px;
   border-radius: 5px;
@@ -250,6 +296,32 @@ const extraStatCount = computed(
   color: rgba(255, 255, 255, 0.5);
   font-size: 10px;
   font-weight: 600;
+}
+
+/* Dashed, because it is the one thing on the pod that is not a reading. Reads
+   "+ stats" on a villain the HUD says nothing about, which is the seat the
+   whole feature exists for. */
+.edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.edit:hover {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
 }
 
 .action {

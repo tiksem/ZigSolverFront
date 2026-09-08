@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8">
+<style>
+  body { font: 13px -apple-system, sans-serif; margin: 0; color: #1d1d1f; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  p { margin: 0 0 10px; line-height: 1.5; }
+  ul { margin: 0 0 10px; padding-left: 18px; line-height: 1.5; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .warn { color: #8a5300; }
+</style>
+</head>
+<body>
+<h2>ZigSolver</h2>
+
+<p>This installs the ZigSolver desktop app and the solver it runs. The
+interface lives inside the app; the solver runs beside it on your own machine
+and is reachable only from the app.</p>
+
+<p>Two things go on this Mac:</p>
+<ul>
+  <li><strong>ZigSolver.app</strong> in <code>/Applications</code></li>
+  <li>the solver, its models and its caches in
+      <code>/Library/Application&nbsp;Support/ZigSolver</code></li>
+</ul>
+
+<p class="warn"><strong>An internet connection is required.</strong> After the
+files are copied, the installer sets up Homebrew, Python and the Python
+packages the solver needs — including PyTorch, which is a few hundred
+megabytes. On a machine that has none of these yet, expect the last step to
+take a while and to look like it has stalled. It has not.</p>
+
+<p>You will be asked for your password: the app is installed for everyone on
+this Mac.</p>
+</body>
+</html>

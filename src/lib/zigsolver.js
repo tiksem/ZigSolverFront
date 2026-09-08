@@ -15,6 +15,7 @@
  */
 
 import { buildAnswer, buildError } from './moveResult'
+import { apiHeaders } from './native'
 
 /** Reads the endpoint's own explanation out of a non-200 body. */
 function detailOf(payload, fallback) {
@@ -40,6 +41,10 @@ function detailOf(payload, fallback) {
  */
 export async function solveMove(url, req, signal) {
   const payload = { body: req.body, regime: req.regime || 'gto' }
+  // Which engine answers a PREFLOP decision. Omitted rather than defaulted to
+  // 'alg' here so an older server -- one that does not know the field -- keeps
+  // its own default instead of being sent a name it would reject.
+  if (req.preflop) payload.preflop = req.preflop
   if (req.handId) payload.handId = req.handId
   if (req.requestId) payload.requestId = req.requestId
   if (req.maxSolveTime) payload.maxSolveTime = req.maxSolveTime
@@ -55,7 +60,7 @@ export async function solveMove(url, req, signal) {
   try {
     res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
       signal,
     })
@@ -119,7 +124,7 @@ export function cancelSolve(url, requestId) {
   try {
     fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ requestId }),
       keepalive: true,
     }).catch(() => {})
@@ -130,7 +135,7 @@ export function cancelSolve(url, requestId) {
 
 /** GET /health — used on the connect screen to prove the API is reachable. */
 export async function health(url, signal) {
-  const res = await fetch(url, { signal })
+  const res = await fetch(url, { headers: apiHeaders(), signal })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   return res.json()
 }

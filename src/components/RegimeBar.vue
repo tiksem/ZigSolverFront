@@ -18,12 +18,20 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import HelpButton from './HelpButton.vue'
 import InfoSheet from './InfoSheet.vue'
 import AdvancedSheet from './AdvancedSheet.vue'
+import PreflopMixSheet from './PreflopMixSheet.vue'
 import {
   REGIMES,
   regime as regimeState,
   MIN_STATS_FOR_EXPLOIT,
   thinReadReason,
 } from '../lib/regime'
+import {
+  PREFLOP_ENGINES,
+  preflop as preflopState,
+  gtoAvailable,
+  setPreflop,
+  setGtoPct,
+} from '../lib/preflop'
 import { settings } from '../lib/settings'
 import { t, tk } from '../lib/i18n'
 
@@ -38,6 +46,8 @@ const props = defineProps({
   statNames: { type: Array, default: () => [] },
   /** What the last Advanced draw sent, and why it was not the coin's. */
   drew: { type: Object, default: null },
+  /** Same, for the preflop engine: { coin, engine, forced }. */
+  preflopDrew: { type: Object, default: null },
   solving: { type: Boolean, default: false },
   canSolve: { type: Boolean, default: false },
 })
@@ -45,6 +55,48 @@ const emit = defineEmits(['select', 'command', 'resolve', 'settings'])
 
 const helpFor = ref(null)
 const advanced = ref(false)
+const pfMix = ref(false)
+
+/**
+ * A preflop engine that needs the blueprint service, on a server that has
+ * none. Shown but inert, exactly like an exploit regime on a hand that cannot
+ * carry it: hiding it would make a configured server and an unconfigured one
+ * look like different builds.
+ */
+function pfInert(value) {
+  const spec = PREFLOP_ENGINES.find((e) => e.value === value)
+  return !!(spec && spec.needsService && !gtoAvailable.value)
+}
+
+function pickPreflop(value) {
+  if (pfInert(value)) return
+  if (value === 'advanced' && preflopState.selected === 'advanced') {
+    pfMix.value = true
+    return
+  }
+  setPreflop(value)
+  if (value === 'advanced') pfMix.value = true
+  else emit('resolve')
+}
+
+function closePfMix() {
+  pfMix.value = false
+  emit('resolve')
+}
+
+/** What the preflop row says under the buttons. */
+/** Which message namespace this hand's help sheet reads from. */
+const helpNs = computed(() => (helpFor.value && helpFor.value.kind === 'preflop' ? 'preflop' : 'regime'))
+
+const pfNote = computed(() => {
+  if (!gtoAvailable.value) return t('preflopBar.noService')
+  const d = props.preflopDrew
+  if (d && d.forced) return t('preflopBar.forced', { reason: tk(d.forced) })
+  if (preflopState.selected === 'advanced' && d) {
+    return t('preflopBar.drew', { engine: t(`preflop.${d.engine}.short`) })
+  }
+  return t(`preflop.${preflopState.selected}.tagline`)
+})
 
 /**
  * Selectable, but it would not answer this hand the way its name says.
@@ -184,6 +236,44 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
     <div class="hair" />
 
+    <section class="block">
+      <div class="row head">
+        <span class="eyebrow">{{ t('preflopBar.heading') }}</span>
+        <span class="muted note">{{ t('preflopBar.note') }}</span>
+      </div>
+
+      <div class="regimes">
+        <div
+          v-for="e in PREFLOP_ENGINES"
+          :key="e.value"
+          class="rwrap"
+          :class="{ on: preflopState.selected === e.value, inert: pfInert(e.value) }"
+        >
+          <button
+            class="rbtn"
+            :title="t(`preflop.${e.value}.tagline`)"
+            @click="pickPreflop(e.value)"
+          >
+            {{ t(`preflop.${e.value}.short`) }}
+            <span v-if="e.value === 'advanced'" class="mix mono">
+              {{ preflopState.gtoPct }}%
+            </span>
+          </button>
+          <HelpButton
+            :size="17"
+            :label="t('regimeBar.about', { name: t(`preflop.${e.value}.title`) })"
+            @click="helpFor = { value: e.value, kind: 'preflop' }"
+          />
+        </div>
+      </div>
+
+      <p class="line" :class="{ warn: !gtoAvailable || (preflopDrew && preflopDrew.forced) }">
+        {{ pfNote }}
+      </p>
+    </section>
+
+    <div class="hair" />
+
     <section class="block bottom">
       <div class="solve">
         <span class="eyebrow">{{ t('regimeBar.solve') }}</span>
@@ -232,13 +322,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       @close="closeAdvanced"
     />
 
+    <PreflopMixSheet v-if="pfMix" @close="closePfMix" />
+
     <InfoSheet
       v-if="helpFor"
-      :title="t(`regime.${helpFor.value}.title`)"
-      :subtitle="t(`regime.${helpFor.value}.tagline`)"
+      :title="t(`${helpNs}.${helpFor.value}.title`)"
+      :subtitle="t(`${helpNs}.${helpFor.value}.tagline`)"
       @close="helpFor = null"
     >
-      <p class="para">{{ t(`regime.${helpFor.value}.detail`) }}</p>
+      <p class="para">{{ t(`${helpNs}.${helpFor.value}.detail`) }}</p>
       <template v-if="helpFor.hasLimits">
         <h4>{{ t('regimeBar.limitsHeading') }}</h4>
         <p class="para">{{ t(`regime.${helpFor.value}.limits`) }}</p>

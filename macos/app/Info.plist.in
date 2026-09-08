@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Template. buildinstaller.sh substitutes __VERSION__ and __BUILD__ and writes
+  the result into the bundle.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>                     <string>ZigSolver</string>
+    <key>CFBundleDisplayName</key>              <string>ZigSolver</string>
+    <key>CFBundleExecutable</key>               <string>ZigSolver</string>
+    <key>CFBundleIdentifier</key>               <string>com.zigsolver.desktop</string>
+    <key>CFBundlePackageType</key>              <string>APPL</string>
+    <key>CFBundleShortVersionString</key>       <string>__VERSION__</string>
+    <key>CFBundleVersion</key>                  <string>__BUILD__</string>
+    <key>CFBundleIconFile</key>                 <string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key>           <string>12.0</string>
+    <key>LSApplicationCategoryType</key>        <string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key>          <true/>
+    <key>NSPrincipalClass</key>                 <string>NSApplication</string>
+
+    <!--
+      Sudden termination would let the system kill this process without running
+      applicationWillTerminate, which is where the solver is stopped. The
+      server also watches its parent and takes itself down (zigsolver_serve.py),
+      so this is the belt to that pair of braces rather than the only one.
+    -->
+    <key>NSSupportsSuddenTermination</key>      <false/>
+    <key>NSSupportsAutomaticTermination</key>   <false/>
+
+    <!--
+      The bot host is a machine on the local network, spoken to over plain
+      ws:// and http:// — it is the user's own runner on their own LAN, not a
+      service on the internet, and it has no certificate.
+
+      NSAllowsArbitraryLoads alone, deliberately: adding NSAllowsLocalNetworking
+      beside it makes newer systems IGNORE this key, and "local networking" does
+      not include the private ranges (10/8, 192.168/16) a bot host actually sits
+      on — so the pair would silently block the one connection this app is for.
+
+      None of this touches the solver's own security. That is loopback plus the
+      token in api/auth.py, and ATS was never what was holding it.
+    -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>       <true/>
+    </dict>
+
+    <!-- macOS 15 asks the user before an app may talk to the LAN. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>ZigSolver connects to your bot host to read the tables it is running.</string>
+</dict>
+</plist>
