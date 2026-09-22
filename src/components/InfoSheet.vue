@@ -1,3 +1,13 @@
+<script>
+/**
+ * Every sheet open right now, bottom to top — shared by all of them.
+ *
+ * Sheets open over sheets (an answer's ranges or details inside the solve
+ * history), and Escape closes the one on top, not every one of them at once.
+ */
+const open = []
+</script>
+
 <script setup>
 import { onMounted, onBeforeUnmount } from 'vue'
 import { t } from '../lib/i18n'
@@ -5,21 +15,31 @@ import { t } from '../lib/i18n'
 defineProps({
   title: { type: String, default: '' },
   subtitle: { type: String, default: '' },
+  /** For a sheet whose content has a width of its own — the 13x13 chart. */
+  wide: { type: Boolean, default: false },
 })
 const emit = defineEmits(['close'])
 
+const me = Symbol('sheet')
+
 function onKey(e) {
-  if (e.key === 'Escape') emit('close')
+  if (e.key === 'Escape' && open.at(-1) === me) emit('close')
 }
-onMounted(() => window.addEventListener('keydown', onKey))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onMounted(() => {
+  open.push(me)
+  window.addEventListener('keydown', onKey)
+})
+onBeforeUnmount(() => {
+  open.splice(open.indexOf(me), 1)
+  window.removeEventListener('keydown', onKey)
+})
 </script>
 
 <template>
   <Teleport to="body">
     <div class="scrim" @click.self="emit('close')">
       <Transition name="pop" appear>
-        <div class="sheet" role="dialog" aria-modal="true">
+        <div class="sheet" :class="{ wide }" role="dialog" aria-modal="true">
           <header class="head">
             <div class="titles">
               <h3>{{ title }}</h3>
@@ -74,6 +94,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-2);
   overflow: hidden;
+}
+
+.sheet.wide {
+  width: min(840px, 100%);
+  max-height: min(90vh, 920px);
 }
 
 .head {

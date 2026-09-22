@@ -112,6 +112,45 @@ export default {
     dropped: 'Not connected — command dropped',
     screenCaptured: 'Screen saved to the API for this failure',
     hostMessages: 'Host messages',
+    history: 'History',
+    historyTitle: 'Solve history — {count}',
+  },
+
+  // --- the solve history -------------------------------------------------
+  history: {
+    title: 'Solve history',
+    subtitle: 'Table {index} · {hands} · {decisions}',
+    hands: { one: '{count} hand', other: '{count} hands' },
+    decisions: { one: '{count} decision', other: '{count} decisions' },
+    empty:
+      'Nothing answered at this table yet. Every answer that lands on screen is kept here, ' +
+      'with the snapshot it was asked on.',
+    rejected: 'Rejected',
+    note:
+      'Kept in this browser, per table, up to the last 150 decisions. Open a hand for its ' +
+      'players, action, answers and ranges; the live table keeps solving underneath.',
+    clear: 'Clear history',
+    clearConfirm: 'Click again to clear',
+    reviewing: 'Reviewing a past decision',
+    older: 'Older decision',
+    newer: 'Newer decision',
+    backToLive: 'Back to live',
+    liveSolving: 'Live table is solving',
+    handTitle: 'Hand at table {index}',
+    allHands: 'All hands',
+    openHand: 'Open hand',
+    finished: 'Played to the end',
+    lastSeen: 'Last seen on the {street}',
+    decisionsLabel: 'Decisions',
+    handSection: 'The hand',
+    decisionsSection: 'Decisions and answers',
+    rangesSection: 'Ranges',
+    noRanges:
+      'No ranges for this hand: none of its answers was a postflop GTO solve, which is the only ' +
+      'kind that reports them.',
+    unreadable: 'This snapshot could not be read back.',
+    showOnFelt: 'Show on felt',
+    onFelt: 'On the felt',
   },
 
   // --- the preflop engine picker -----------------------------------------
@@ -419,6 +458,46 @@ export default {
     node: 'Node',
     budgetSent: 'Budget sent',
     handId: 'handId',
+  },
+
+  /** The ranges sheet: what the solve was actually run against. */
+  ranges: {
+    open: 'Ranges',
+    title: 'Ranges the solve ran on',
+    subtitle: 'From {source}',
+    heading: 'Ranges',
+    available:
+      'This answer carries the ranges it was solved against, per player and per street.',
+    noneExploit:
+      'No ranges: the exploit regime never enumerates villain’s. It walks the hand against ' +
+      'behavioural models fitted on real play, so there is no range to draw — the models are ' +
+      'the opponent.',
+    nonePreflop:
+      'No ranges: preflop is answered by a chart bent by the opponents’ VPIP / PFR / ATS / ' +
+      '3BET, not solved against their ranges. They are built for the first postflop street.',
+    noneOther:
+      'No ranges on this answer. The endpoint reports them for a postflop GTO solve; an older ' +
+      'API does not report them at all.',
+    playersLabel: 'Players',
+    streetsLabel: 'Streets',
+    hero: 'You',
+    width: 'Width',
+    combos: 'Combos',
+    narrowed: 'Narrowed',
+    widened: 'Widened',
+    points: 'pts',
+    since: 'since the {street}',
+    notInGame:
+      'No range for this player at the {street}: they had no seat in the game solved there. A ' +
+      'player who has folded leaves their chips in the pot as dead money and is not in the tree.',
+    empty: 'Nothing has come back carrying ranges for this hand yet.',
+    chartLabel: 'The 13 × 13 hand chart',
+    cellTitle: '{hand} — held at {pct}%, {held} of {combos} combos',
+    cellDead: '{hand} — no combos left on this board',
+    note:
+      'Each cell is how much of that hand the range holds, averaged over the combos the board ' +
+      'leaves live. Hatched cells are hands the board has taken every combo of. Width is the ' +
+      'share of every live combo, so two players on one board are comparable.',
   },
 
   // --- settings sheet ----------------------------------------------------

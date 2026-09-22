@@ -4,9 +4,35 @@
     {
       "name": "zigsolver-front",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "mock-hosts",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "mock/server.js",
+        "8080",
+        "8000"
+      ],
+      "port": 8080
+    },
+    {
+      "name": "fakebot",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "fakebot/server.js",
+        "8081",
+        "--hero-delay",
+        "8000",
+        "--speed",
+        "4"
+      ],
+      "port": 8081
     }
   ]
 }

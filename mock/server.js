@@ -414,6 +414,97 @@ const flowFor = (budget) => {
 }
 
 /**
+ * `meta.ranges` fixtures — the block the real endpoint fills from the ranges
+ * the solve was actually handed (api/move.py::_ranges_meta).
+ *
+ * Built rather than written out: 169 weights per player per street is not a
+ * literal anybody would keep honest, and what the sheet has to be exercised
+ * against is the SHAPE — a top-down ordering with a soft edge, a hero wider
+ * than a blind defender, and a width that shrinks street to street. So each
+ * fixture is a percentage and the generator takes hands in strength order
+ * until it has that much of the deck.
+ */
+const RANGE_RANKS = 'AKQJT98765432'.split('')
+const rankValue = (r) => 14 - RANGE_RANKS.indexOf(r)
+
+const ALL_CLASSES = (() => {
+  const out = []
+  for (let i = 0; i < 13; i += 1) {
+    for (let j = 0; j < 13; j += 1) {
+      const hi = RANGE_RANKS[Math.min(i, j)]
+      const lo = RANGE_RANKS[Math.max(i, j)]
+      out.push(i === j ? `${hi}${hi}` : i < j ? `${hi}${lo}s` : `${hi}${lo}o`)
+    }
+  }
+  return [...new Set(out)]
+})()
+
+/** A rough preflop ordering — enough for a chart that reads like a range. */
+const classScore = (key) => {
+  const hi = rankValue(key[0])
+  const lo = rankValue(key[1])
+  if (key.length === 2) return 200 + hi * 2
+  const gap = hi - lo - 1
+  return hi * 3 + lo * 2 - gap * 3 + (key[2] === 's' ? 14 : 0)
+}
+
+const classCombos = (key, dead) => {
+  const suitsOf = (r) => 'shdc'.split('').filter((s) => !dead.has(`${r}${s}`))
+  const a = suitsOf(key[0])
+  if (key.length === 2) return (a.length * (a.length - 1)) / 2
+  const b = suitsOf(key[1])
+  const both = a.filter((s) => b.includes(s)).length
+  return key[2] === 's' ? both : a.length * b.length - both
+}
+
+/** A range `widthPct` wide on `board`, with the boundary hands at part weight. */
+function mockRange(widthPct, board) {
+  const dead = new Set(String(board || '').split(/\s+/).filter(Boolean))
+  const combosOf = {}
+  let live = 0
+  for (const key of ALL_CLASSES) {
+    combosOf[key] = classCombos(key, dead)
+    live += combosOf[key]
+  }
+  const want = (widthPct / 100) * live
+  const order = [...ALL_CLASSES].sort((a, b) => classScore(b) - classScore(a))
+  const weights = {}
+  let held = 0
+  for (const key of order) {
+    if (!combosOf[key]) continue
+    const left = want - held
+    if (left <= 0) break
+    // The edge of a range is mixed, not a cliff: the class that overshoots is
+    // taken at the share that fits, which is what a solver's range looks like.
+    const w = Math.min(1, left / combosOf[key])
+    if (w < 0.02) break
+    weights[key] = Math.round(w * 1000) / 1000
+    held += w * combosOf[key]
+  }
+  return {
+    weights,
+    combos: Math.round(held * 100) / 100,
+    widthPct: Math.round((held / live) * 10000) / 100,
+  }
+}
+
+const mockPlayer = (p, board) => ({
+  seat: p.seat,
+  name: p.name,
+  position: p.position,
+  label: `'${p.name}' (${p.position})`,
+  hero: !!p.hero,
+  ...mockRange(p.width, board),
+})
+
+const mockRanges = ({ source, rootedAt, board, players }) => ({
+  source,
+  rootedAt,
+  board,
+  players: players.map((p) => mockPlayer(p, board)),
+})
+
+/**
  * One answer per call, under the request's `regime`.
  *
  * GTO is a distribution to mix at; exploit is a ranking by EV whose top row is
@@ -566,6 +657,19 @@ const answerFor = (req) => {
           'bet 150%(18.6BB)': 'bluff',
           'all-in(55.6BB)': 'bluff',
         },
+        // A turn decision is solved as a turn game, so the ranges are the ones
+        // the flop blueprint carried into it — narrower than the flop's.
+        rootedAt: 'turn',
+        entrySource: "this handId's flop blueprint (exact)",
+        ranges: mockRanges({
+          source: "this handId's flop blueprint (exact)",
+          rootedAt: 'turn',
+          board: 'Ks 8d 3d 7c',
+          players: [
+            { seat: 'ip', name: '*me*', position: 'CO', hero: true, width: 19.5 },
+            { seat: 'oop', name: 'Big Stack Bob', position: 'BB', width: 24.8 },
+          ],
+        }),
         warnings: [],
       },
     }
@@ -606,6 +710,17 @@ const answerFor = (req) => {
           'raise 100%(24.8BB)': 'bluff_raise',
           'all-in(55.6BB)': 'bluff_raise',
         },
+        rootedAt: 'river',
+        entrySource: "this handId's turn blueprint (exact)",
+        ranges: mockRanges({
+          source: "this handId's turn blueprint (exact)",
+          rootedAt: 'river',
+          board: 'Ks 8d 3d 7c 2h',
+          players: [
+            { seat: 'ip', name: '*me*', position: 'CO', hero: true, width: 14.2 },
+            { seat: 'oop', name: 'Big Stack Bob', position: 'BB', width: 18.1 },
+          ],
+        }),
         warnings: [],
       },
     }
@@ -634,6 +749,20 @@ const answerFor = (req) => {
         'raise 60%(14.2BB)': 'semi_bluff',
         'all-in(85.7BB)': 'bluff_raise',
       },
+      // A flop root is solved on the unconditioned entry estimates — the
+      // widest the ranges ever are, and the baseline every later street's
+      // narrowing is read against.
+      rootedAt: 'flop',
+      entrySource: 'flop entry ranges',
+      ranges: mockRanges({
+        source: 'flop entry ranges',
+        rootedAt: 'flop',
+        board: '4h Td 8c',
+        players: [
+          { seat: 'ip', name: '*me*', position: 'CO', hero: true, width: 31.4 },
+          { seat: 'oop', name: 'Dmitri O', position: 'LJ', width: 22.6 },
+        ],
+      }),
       warnings: [],
     },
   }

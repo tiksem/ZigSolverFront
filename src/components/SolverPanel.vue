@@ -12,9 +12,11 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import PlayingCard from './PlayingCard.vue'
 import HelpButton from './HelpButton.vue'
 import InfoSheet from './InfoSheet.vue'
+import RangesSheet from './RangesSheet.vue'
 import { describeSolver, describeFlow, decisionLabel } from '../lib/solvers'
 import { REGIME_BY_VALUE } from '../lib/regime'
 import { ACTION_TONE, pct } from '../lib/moveResult'
+import { whyNoRanges } from '../lib/ranges'
 import { t, tp, tv, tk } from '../lib/i18n'
 
 const props = defineProps({
@@ -24,12 +26,31 @@ const props = defineProps({
   startedAt: { type: Number, default: null },
   /** The regime currently selected: 'gto' | 'exploit' | 'manual'. */
   regime: { type: String, default: 'gto' },
+  /**
+   * The ranges this HAND has been solved on, one record per street that came
+   * back carrying them (lib/ranges.rangeStreets). Not read off `result`: the
+   * point of the sheet is the streets BEFORE the one on screen.
+   */
+  ranges: { type: Array, default: () => [] },
 })
 
 const solverHelp = ref(false)
-// Both of these open a sheet OVER the answer, and neither is persisted: a modal
+// All three open a sheet OVER the answer, and none is persisted: a modal
 // restored open on load covers a panel that has no result behind it yet.
 const details = ref(false)
+const rangesOpen = ref(false)
+
+/**
+ * The hand the sheet is about has gone — a new one dealt, or the table swapped
+ * under it. What is left to show is the next hand's empty history, so it
+ * closes rather than sitting there saying nothing.
+ */
+watch(
+  () => props.ranges.length,
+  (n) => {
+    if (!n) rangesOpen.value = false
+  },
+)
 
 const solver = computed(() => describeSolver(props.result?.solver))
 const meta = computed(() => props.result?.meta || {})
@@ -235,6 +256,16 @@ const facts = computed(() => {
   return out
 })
 
+/**
+ * Why the answer on screen carries no ranges, or null.
+ *
+ * Only ever a property of the regime that ran — the preflop engines are not
+ * solved against enumerated ranges and the exploit one never builds villain's
+ * at all — so it is said in the details rather than left to look like a field
+ * that failed to arrive.
+ */
+const noRanges = computed(() => whyNoRanges(props.result))
+
 const warnings = computed(() => props.result?.warnings || [])
 const tone = (a) => (a ? ACTION_TONE[a.kind] || ACTION_TONE.other : 'var(--label-3)')
 
@@ -286,6 +317,13 @@ const errorHint = computed(() => say(props.result?.hint))
           <span class="spinner" />{{ t('panel.solving') }}
           <span v-if="startedAt != null" class="mono clock">{{ ticking.toFixed(1) }}s</span>
         </span>
+        <!-- The ranges the hand has been solved on. Shown whenever this hand
+             has any, not only when the answer on screen carries them: a
+             preflop chart or an exploit answer has none of its own, and the
+             flop's are still the thing worth looking at from there. -->
+        <button v-if="ranges.length" class="btn btn-sm" @click="rangesOpen = true">
+          {{ t('ranges.open') }}
+        </button>
         <button v-if="answer" class="btn btn-sm" @click="details = true">
           {{ t('common.details') }}
         </button>
@@ -419,6 +457,15 @@ const errorHint = computed(() => say(props.result?.hint))
         </div>
       </div>
 
+      <h4>{{ t('ranges.heading') }}</h4>
+      <p v-if="noRanges" class="para">{{ t(noRanges) }}</p>
+      <p v-else class="para">
+        {{ t('ranges.available') }}
+        <button class="linky" @click="details = false; rangesOpen = true">
+          {{ t('ranges.open') }}
+        </button>
+      </p>
+
       <template v-if="warnings.length">
         <h4>{{ t('common.warningsHeading') }}</h4>
         <ul class="warnings">
@@ -429,6 +476,13 @@ const errorHint = computed(() => say(props.result?.hint))
       <h4>{{ t('common.rawHeading') }}</h4>
       <pre class="raw mono">{{ JSON.stringify(result?.payload, null, 2) }}</pre>
     </InfoSheet>
+
+    <RangesSheet
+      v-if="rangesOpen"
+      :streets="ranges"
+      :street="result?.street || null"
+      @close="rangesOpen = false"
+    />
   </div>
 </template>
 

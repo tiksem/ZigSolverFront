@@ -31,10 +31,13 @@ import { useSocket } from '../lib/useSocket'
 import { parseHandBody, isHandOverLine, decisionKey } from '../lib/handBody'
 import { solveMove, cancelSolve, createHandIds } from '../lib/zigsolver'
 import { captureScreenError, resetScreenErrors } from '../lib/screenError'
+import { recordRanges, rangeStreets, clearRanges } from '../lib/ranges'
 import SettingsSheet from '../components/SettingsSheet.vue'
 import SeatStatsSheet from '../components/SeatStatsSheet.vue'
 import TournamentSheet from '../components/TournamentSheet.vue'
 import MessageDock from '../components/MessageDock.vue'
+import HistorySheet from '../components/HistorySheet.vue'
+import { recordSolve, recordHandEnd, entriesFor, findEntry, rangesAt } from '../lib/history'
 import { notify } from '../lib/notify'
 import { applyManualStats, manualStats, statsFor } from '../lib/manualStats'
 import {
@@ -55,7 +58,7 @@ import {
   displayApi,
 } from '../lib/server'
 import { settings } from '../lib/settings'
-import { t, tv } from '../lib/i18n'
+import { locale, t, tv } from '../lib/i18n'
 import {
   regime,
   setRegime,
@@ -192,6 +195,71 @@ const handIdFor = createHandIds(props.index)
 
 const handUrl = computed(() => socketUrl(MODE_HAND, props.index))
 const canSolve = computed(() => !!lastBody.value && !!api.value)
+
+/**
+ * The ranges this hand has been solved on, one record per street.
+ *
+ * Collected here rather than read off the answer, because the answer only ever
+ * carries the street it is for: the flop's ranges are gone from the payload by
+ * the time the turn is answered, and the whole point of looking at them is
+ * watching a street narrow the one before it (lib/ranges.js).
+ */
+const handRanges = computed(() => rangeStreets(props.index))
+
+/**
+ * The past decision on the felt instead of the live one, by history entry id —
+ * or null for the live table.
+ *
+ * Reviewing only swaps what is DRAWN. Everything live carries on underneath —
+ * the socket, the solves, the answer they land — so going back to live shows
+ * whatever the table has done meanwhile, with nothing missed.
+ */
+const reviewId = ref(null)
+const showHistory = ref(false)
+const reviewEntry = computed(() => findEntry(props.index, reviewId.value))
+const reviewing = computed(() => !!reviewEntry.value)
+
+const shownHand = computed(() =>
+  reviewEntry.value ? parseHandBody(reviewEntry.value.result.request.body) : hand.value,
+)
+const shownResult = computed(() => (reviewEntry.value ? reviewEntry.value.result : result.value))
+const shownRanges = computed(() =>
+  reviewEntry.value ? rangesAt(props.index, reviewEntry.value) : handRanges.value,
+)
+
+/** The reviewed entry's neighbours, older and newer, for stepping through. */
+const reviewStep = computed(() => {
+  const list = entriesFor(props.index)
+  const at = reviewEntry.value ? list.indexOf(reviewEntry.value) : -1
+  if (at < 0) return { older: null, newer: null }
+  return { older: list[at + 1]?.id || null, newer: list[at - 1]?.id || null }
+})
+
+const historyCount = computed(() => entriesFor(props.index).length)
+
+/** 'Flop · 14:32:07' — which decision, and when it was answered. */
+const reviewWhen = computed(() => {
+  const e = reviewEntry.value
+  if (!e) return ''
+  const street = e.street ? tv(`street.${e.street}`, e.street) : t('street.decision')
+  const time = new Date(e.at).toLocaleString(locale.value, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+  return `${street} · ${time}`
+})
+
+function openEntry(id) {
+  reviewId.value = id
+  showHistory.value = false
+}
+
+function backToLive() {
+  reviewId.value = null
+}
 
 /** Whether the exploit regime can answer this hand — 'ok' / 'pending' / 'no'. */
 const exploit = computed(() => exploitAvailability(hand.value))
@@ -412,6 +480,9 @@ function stopSolving() {
  */
 function handOver(parsed) {
   stopSolving()
+  // How the hand ended goes into its history before the hand id is let go of:
+  // the decisions stop at the hero's last action, and this is the rest of it.
+  if (parsed) recordHandEnd(props.index, lastHandId, parsed.raw)
   if (parsed) hand.value = parsed
   lastBody.value = null
   hostBody.value = null
@@ -499,6 +570,10 @@ function onHandMessage(text) {
     lastHandId = null
     drew.value = null
     forgetHandChoice()
+    // A new hand is being dealt, so the last one's ranges describe a table
+    // that is gone. NOT cleared when the hand merely ends: the felt keeps the
+    // final table, and the ranges it was played on are still worth reading.
+    clearRanges(props.index)
     feed.value = []
   }
   // Everything the host says that is not a snapshot: a notification now, and
@@ -640,6 +715,11 @@ async function solve(picked = null, { supersede = true } = {}) {
     preflop: preflopToSend(),
   }
 
+  // The hand this question is about, read now rather than when the answer
+  // lands: a snapshot arriving mid-solve moves `lastHandId` on, and filing the
+  // ranges under it would put this hand's flop in the next hand's history.
+  const forHand = lastHandId
+
   const started = performance.now()
   // A shielded call does not restart the clock: the solve it went out beside is
   // still running and still the one being waited on, and the panel counting from
@@ -694,6 +774,11 @@ async function solve(picked = null, { supersede = true } = {}) {
         if (still && still.probability > 0) out.sampled = still
       }
       result.value = out
+      // Keep whatever ranges this answer ran on, under the hand it was asked
+      // about — a no-op for the regimes that enumerate none.
+      recordRanges(props.index, forHand, out)
+      // And the answer itself, so the hand can be read again once it is gone.
+      recordSolve(props.index, forHand, out)
       if (out.type === 'error') captureFailure(out, request)
     }
   } catch (e) {
@@ -711,6 +796,7 @@ async function solve(picked = null, { supersede = true } = {}) {
         clientSeconds: (performance.now() - started) / 1000,
       }
       result.value = failed
+      recordSolve(props.index, forHand, failed)
       captureFailure(failed, request)
     }
   } finally {
@@ -725,6 +811,10 @@ async function solve(picked = null, { supersede = true } = {}) {
 }
 
 function selectRegime(value) {
+  // Every gesture on the bar is about the live table, so it goes back to it —
+  // a regime picked while a past hand is on the felt would otherwise re-solve
+  // a spot you are not looking at.
+  backToLive()
   setRegime(value)
   // Picking a regime is a deliberate gesture about the hand in front of you, so
   // it drops whatever that hand had already been assigned — otherwise clicking
@@ -759,6 +849,8 @@ const editing = ref(null)
 let editingBefore = null
 
 function editStats(seat) {
+  // A past snapshot is read, not edited: what is typed goes into the LIVE body.
+  if (reviewing.value) return
   const host = hostBody.value ? parseHandBody(hostBody.value) : null
   const hostSeat = host ? host.seats.find((s) => s.name === seat.name) : null
   editing.value = {
@@ -792,6 +884,7 @@ const editingTourney = ref(null)
 let tourneyBefore = null
 
 function editTournament() {
+  if (reviewing.value) return
   const host = hostBody.value ? parseHandBody(hostBody.value) : null
   editingTourney.value = { host: host?.tournament || null }
   tourneyBefore = JSON.stringify(tournamentFor(props.index))
@@ -845,7 +938,7 @@ function showToast(text, ok = true) {
 
 watch(
   () => props.index,
-  () => {
+  (now, before) => {
     stopSolving()
     hand.value = null
     result.value = null
@@ -854,9 +947,15 @@ watch(
     hostBody.value = null
     editing.value = null
     editingTourney.value = null
+    reviewId.value = null
+    showHistory.value = false
     lastHandId = null
     drew.value = null
     forgetHandChoice()
+    // Both ends: the table being left is done with, and the one being opened
+    // is mid-hand in a hand this view has watched none of.
+    clearRanges(before)
+    clearRanges(now)
     // A capture is remembered so one bug is photographed once; a different
     // table is a different set of bugs.
     resetScreenErrors()
@@ -901,6 +1000,32 @@ onBeforeUnmount(() => {
               : t('table.solverReady')
         "
       />
+      <button
+        class="gear"
+        :class="{ on: reviewing }"
+        :title="t('table.historyTitle', { count: historyCount })"
+        :aria-label="t('table.history')"
+        @click="showHistory = true"
+      >
+        <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+          <path
+            d="M3.2 10a6.8 6.8 0 1 0 2-4.8M3.2 3.6v3.2h3.2"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+          <path
+            d="M10 6.2V10l2.6 1.7"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
       <button class="gear" :title="t('nav.settings')" @click="showSettings = true">
         <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
           <circle cx="10" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7" />
@@ -931,9 +1056,42 @@ onBeforeUnmount(() => {
         <!-- No swap transition and no :key here on purpose: the felt updates in
              place on every snapshot, and an out-in transition stalls whenever the
              tab is backgrounded (rAF throttling), which would strand the table. -->
+        <div v-if="reviewing" class="review card">
+          <div class="rtext">
+            <strong>{{ t('history.reviewing') }}</strong>
+            <span class="muted tnum">{{ reviewWhen }}</span>
+          </div>
+          <span v-if="solving" class="live">
+            <span class="dot" />{{ t('history.liveSolving') }}
+          </span>
+          <div class="rnav">
+            <button
+              class="btn btn-sm"
+              :disabled="!reviewStep.older"
+              :title="t('history.older')"
+              :aria-label="t('history.older')"
+              @click="reviewId = reviewStep.older"
+            >
+              ‹
+            </button>
+            <button
+              class="btn btn-sm"
+              :disabled="!reviewStep.newer"
+              :title="t('history.newer')"
+              :aria-label="t('history.newer')"
+              @click="reviewId = reviewStep.newer"
+            >
+              ›
+            </button>
+            <button class="btn btn-sm btn-primary" @click="backToLive">
+              {{ t('history.backToLive') }}
+            </button>
+          </div>
+        </div>
+
         <PokerTable
-          v-if="hand"
-          :hand="hand"
+          v-if="shownHand"
+          :hand="shownHand"
           :table-index="index"
           @edit-stats="editStats"
           @edit-tournament="editTournament"
@@ -957,7 +1115,7 @@ onBeforeUnmount(() => {
           :can-solve="canSolve"
           @select="selectRegime"
           @command="command"
-          @resolve="solve()"
+          @resolve="backToLive(); solve()"
           @settings="showSettings = true"
         />
 
@@ -965,14 +1123,15 @@ onBeforeUnmount(() => {
           v-if="pending"
           :hand="pending.heroHand ? pending.heroHand.join('') : null"
           :street="pending.streetName"
-          @pick="solve"
+          @pick="(r) => (backToLive(), solve(r))"
         />
 
         <SolverPanel
-          :result="result"
-          :pending="solving"
-          :started-at="solveStartedAt"
+          :result="shownResult"
+          :pending="!reviewing && solving"
+          :started-at="reviewing ? null : solveStartedAt"
           :regime="regime.selected"
+          :ranges="shownRanges"
         />
       </aside>
     </div>
@@ -980,6 +1139,14 @@ onBeforeUnmount(() => {
     <MessageDock :messages="feed" :title="t('table.hostMessages')" @clear="feed = []" />
 
     <SettingsSheet v-if="showSettings" @close="showSettings = false" />
+
+    <HistorySheet
+      v-if="showHistory"
+      :table-index="index"
+      :current="reviewId"
+      @open="openEntry"
+      @close="showHistory = false"
+    />
 
     <SeatStatsSheet
       v-if="editing"
@@ -1066,6 +1233,62 @@ onBeforeUnmount(() => {
 .gear:hover {
   background: var(--fill-strong);
   color: var(--label);
+}
+
+.gear.on {
+  background: var(--blue);
+  color: #fff;
+}
+
+/* Above the felt while a past decision is on it, so there is no mistaking it
+   for the live table. */
+.review {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px 10px 16px;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--blue) 55%, transparent), var(--shadow-1);
+}
+
+.rtext {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.rtext .muted {
+  font-size: 13px;
+}
+
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--label-2);
+  font-size: 12.5px;
+}
+
+.live .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--orange);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.rnav {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .offline {

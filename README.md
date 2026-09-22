@@ -114,6 +114,78 @@ folding is `0` by construction and every other number is read against it.
 winning branch under ~2% is one the models are extrapolating on, and the panel
 flags it.
 
+## The ranges behind the answer
+
+A postflop answer is a game between weighted ranges, and a frequency that looks
+wrong is almost always a range that is wrong. So **Ranges**, next to Details,
+opens the ones this hand was actually solved on: **a tab per player nick**, the
+13x13 chart, and the hand's **streets** to move between.
+
+The endpoint reports them per answer (`meta.ranges` — one entry per seat of the
+game that was *solved*, so a pot re-rooted at the turn reports the survivors).
+Each cell is **how much of that hand the range holds**, averaged over the
+combos the board leaves live, and the width beside it is the share of every
+live combo — so two players on one board are comparable, and a width that
+shrinks street to street is narrowing rather than the board eating combos. A
+hand the board has taken every combo of is hatched, not drawn at 0%: "this
+range does not hold it" and "there is none left to hold" are different facts.
+
+**The streets are collected here, not asked for.** Every street of a hand is a
+separate `/move`, and each answer carries the ranges it was answered on — so
+the sheet keeps them as they arrive, keyed by `handId`, and a street re-solved
+replaces its own record. That makes "what did the turn card do to this" free;
+asking the endpoint for every street on every call would price a narrowing
+nobody has asked to see. The width of the street before rides next to the one
+on screen (*narrowed −11.9 pts since the flop*), because a change is the only
+form the answer takes.
+
+Two regimes carry none, and the details sheet says which: **preflop** is a
+chart bent by the opponents' stats rather than a solve against their ranges,
+and the **exploit** regime walks the hand against behavioural models and never
+enumerates villain's range at all. The button still appears once the flop has
+been answered, so an exploit answer on the turn can still be read against the
+ranges the flop was solved on.
+
+## Solve history
+
+The panel only ever holds the newest answer: the turn replaces the flop, and
+the next hand replaces the river. So every answer that lands on screen — a
+refused call included, since that is usually a misread worth seeing again — is
+kept with the snapshot it was asked on, and so is the snapshot the hand **ended
+on** when the host sends one (the body ending in *Hand finished*). The **clock
+button** in the nav opens the table's history: a block per hand, a row per
+decision, with the street, the board, what was played and the regime.
+
+**Opening a hand** shows all of it, built from the same components as the live
+table:
+
+* **The hand** — players, positions, stacks and HUD stats, the action street by
+  street and the raw body (HandDetails). It is read from the ending snapshot
+  when there is one, so it runs past the hero's last decision: the villains'
+  later actions, the rest of the board, cards shown down.
+* **Decisions and answers** — every answer exactly as the panel showed it:
+  the play, the full action table, the regime and solver, the timings, and
+  Details and Ranges for that decision.
+* **Ranges** — the hand's range streets inline, per player (RangesView).
+
+**Show on felt** puts a decision back on the table itself, under a *Reviewing a
+past decision* banner with ‹ › to step through decisions and **Back to live**
+to return. It is read-only — the seat and tournament editors stay closed — and
+**Ranges** there shows the streets as they stood when that decision was
+answered, never a later one. The live table keeps solving underneath, and
+anything on the regime bar goes back to it.
+
+Three details:
+
+* **Kept per table, in this browser**, up to the last 150 decisions each. A
+  write that hits the storage quota drops the oldest quarter across all tables
+  and tries again, rather than silently keeping nothing from then on.
+* **Re-solving the same body in the same regime replaces its row**; a
+  different regime on the same body is a different question and gets its own.
+* **Hands are grouped by `handId` within one page load.** The handId count
+  restarts on a reload, so each load prefixes its own session id rather than
+  filing tonight's first hand under last night's.
+
 ## Typing the stats the HUD does not carry
 
 Every stat the snapshot does not carry is **imputed from the population** on the
@@ -272,7 +344,22 @@ body the endpoint refuses, table **9** a full 9-max ring whose header carries
 the pot and nothing about the tournament (the table to try typing one into). The fake
 `/move` takes 2.5s so cancellation is observable, implements `/cancel` and
 supersede-on-reuse like the real one, and answers both regimes — the exploit one
-with EVs and support, so the panel's second column set is exercised. Both hosts
+with EVs and support, so the panel's second column set is exercised. Every
+postflop GTO answer carries a **`meta.ranges`** block, generated rather than
+written out (a percentage taken in strength order, with the boundary class at
+part weight) and narrower street by street, so the ranges sheet has something
+to draw.
+
+Those fixtures are one street per table, which the **street tabs** are not. To
+watch a hand's ranges narrow across streets without the real solver, point the
+app at the fakebot for the game and the mock for the answers — the fakebot's
+hands advance, and the mock answers each street with its own fixture:
+
+```bash
+node mock/server.js 8080 8000 & node fakebot/server.js 8081 --hero-delay 25000 --speed 3
+```
+
+Connect to `localhost:8081` with the API on `localhost:8000`. Both hosts
 carry the failed-call capture path: `GET /image/N` serves a stand-in screenshot
 (a felt with the table number on it, drawn by [fakebot/png.js](fakebot/png.js)),
 and the fake `/screenError` logs what it was posted instead of storing it.
@@ -311,6 +398,9 @@ src/
   lib/        handBody.js   snapshot parser (port of api/handhistory.py)
               zigsolver.js  /move + /cancel client, handId minting
               moveResult.js answer normalizer + action sampling
+              ranges.js     the ranges a solve ran on: the chart, and the
+                            hand's streets of them as they arrive
+              history.js    every answer shown, per table, kept for review
               settings.js   persisted solve settings
               regime.js     gto|exploit|manual, and where exploit applies
               manualStats.js the four HUD stats, typed by hand
@@ -323,6 +413,7 @@ src/
   components/ PokerTable · SeatPod · PlayingCard · SolverPanel
               RegimeBar · RegimePrompt · HandDetails · SettingsSheet
               SeatStatsSheet · TournamentSheet · InfoSheet · HelpButton
+              RangesSheet · RangesView · RangeGrid · HistorySheet
               MessageDock · NotificationStack · AppNav · StatusDot
   views/      ConnectView · TableView · CheckView
 mock/         the two hosts as fixed snapshots
