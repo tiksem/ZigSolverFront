@@ -2,57 +2,62 @@
 /**
  * The solve settings. Each row says what the option does at the endpoint, so
  * the sheet doubles as the documentation for the /move fields it drives.
+ *
+ * The coordinator keeps them — one copy for every page, on every machine — so
+ * a change here goes to it and comes back as the state every page draws. Only
+ * the coordinator's own address is this browser's to keep.
  */
 import { computed, onMounted } from 'vue'
 import InfoSheet from './InfoSheet.vue'
 import {
-  settings,
+  state,
+  meta,
+  coordinatorInput,
+  coordinatorUrl,
+  looksLikeAddress,
+  setCoordinator,
   setSetting,
   resetSettings,
-  noteServerInfo,
-  serverDefault,
-  BUDGET_PRESETS,
-  GATE_PRESETS,
-  DEFAULTS,
-} from '../lib/settings'
-import {
-  serverInput,
-  apiInput,
-  apiTokenInput,
-  setServer,
-  setApi,
-  setApiToken,
-  parseServer,
-  apiUrl,
-} from '../lib/server'
-import { health } from '../lib/zigsolver'
+  setEndpoint,
+  probeHealth,
+} from '../lib/coordinator'
 import { t } from '../lib/i18n'
 import { isNative } from '../lib/native'
 
 const emit = defineEmits(['close'])
 
-const dirty = computed(() =>
-  Object.keys(DEFAULTS).some((k) => settings[k] !== DEFAULTS[k]),
-)
+const settings = computed(() => state.settings)
+const BUDGET_PRESETS = computed(() => meta.settings.budgetPresets)
+const GATE_PRESETS = computed(() => meta.settings.gatePresets)
 
-const hostOk = computed(() => !!parseServer(serverInput.value))
-const apiOk = computed(() => !!parseServer(apiInput.value))
+const dirty = computed(() => {
+  const defaults = meta.settings.defaults || {}
+  return Object.keys(defaults).some((k) => state.settings[k] !== defaults[k])
+})
+
+const coordinatorOk = computed(() => !!coordinatorUrl(coordinatorInput.value))
+const hostOk = computed(() => looksLikeAddress(state.config.host))
+const apiOk = computed(() => looksLikeAddress(state.config.api))
 
 // The three flop knobs show the API's OWN defaults as their placeholder, so an
 // untouched row says what the server will really do instead of a number this
 // app made up. Re-read every time the sheet opens: the API may have moved.
-onMounted(async () => {
-  const url = apiUrl('/health')
-  if (!url) return
-  try {
-    noteServerInfo(await health(url))
-  } catch {
-    /* unreachable API: the placeholders just read "server default" */
+onMounted(probeHealth)
+
+/** The server's default for `key`, as a string for a placeholder, or null. */
+function serverDefault(key, budget) {
+  const spec = state.solveTuning && state.solveTuning[key]
+  if (!spec) return null
+  if (spec.default !== null && spec.default !== undefined) return String(spec.default)
+  // minSolveTime's default is a FRACTION of the budget, not a fixed number.
+  if (spec.defaultFraction && Number.isFinite(budget)) {
+    return `${Math.round(budget * spec.defaultFraction * 10) / 10}`
   }
-})
+  return null
+}
 
 function placeholder(key) {
-  const v = serverDefault(key, Number(settings.maxSolveTime))
+  const v = serverDefault(key, Number(state.settings.maxSolveTime))
   return v === null ? t('settings.serverDefault') : v
 }
 </script>
@@ -239,6 +244,25 @@ function placeholder(key) {
     <section class="grp">
       <h4>{{ t('settings.endpointsGroup') }}</h4>
 
+      <!-- This browser's own setting: where the coordinator is. Everything
+           below it is the coordinator's. -->
+      <div class="row col">
+        <div class="lab">
+          <strong>{{ t('settings.coordinator') }}</strong>
+          <span class="desc">{{ t('settings.coordinatorDesc') }}</span>
+        </div>
+        <input
+          class="field"
+          :class="{ bad: !coordinatorOk }"
+          type="text"
+          spellcheck="false"
+          autocapitalize="off"
+          placeholder="localhost:8765"
+          :value="coordinatorInput"
+          @change="setCoordinator($event.target.value)"
+        />
+      </div>
+
       <div class="row col">
         <div class="lab">
           <strong>{{ t('settings.botHost') }}</strong>
@@ -246,18 +270,18 @@ function placeholder(key) {
         </div>
         <input
           class="field"
-          :class="{ bad: serverInput && !hostOk }"
+          :class="{ bad: state.config.host && !hostOk }"
           type="text"
           spellcheck="false"
           autocapitalize="off"
           placeholder="localhost:8080"
-          :value="serverInput"
-          @change="setServer($event.target.value)"
+          :value="state.config.host"
+          @change="setEndpoint('host', $event.target.value)"
         />
       </div>
 
-      <!-- Not a row under the shell: the solver is this app's own process on
-           loopback, and the endpoint arrives injected (lib/native.js). -->
+      <!-- Not a field under the shell: the solver is the app's own process on
+           loopback, and its endpoint arrives injected (lib/native.js). -->
       <div class="row col">
         <div class="lab">
           <strong>{{ t('settings.api') }}</strong>
@@ -268,34 +292,48 @@ function placeholder(key) {
         <input
           v-if="!isNative"
           class="field"
-          :class="{ bad: apiInput && !apiOk }"
+          :class="{ bad: state.config.api && !apiOk }"
           type="text"
           spellcheck="false"
           autocapitalize="off"
           placeholder="localhost:8000"
-          :value="apiInput"
-          @change="setApi($event.target.value)"
+          :value="state.config.api"
+          @change="setEndpoint('api', $event.target.value)"
         />
-        <p v-else class="fixed">{{ apiInput }}</p>
+        <p v-else class="fixed">{{ state.config.api }}</p>
       </div>
 
       <!-- Only where it can be typed. Under the shell the token is the app's
-           own, minted for the launch, and is not a setting. -->
+           own, minted for the launch, and is not a setting. The coordinator
+           never sends a saved token back, so the field starts empty either
+           way and says whether there is one. -->
       <div v-if="!isNative" class="row col">
         <div class="lab">
           <strong>{{ t('settings.apiToken') }}</strong>
           <span class="desc">{{ t('settings.apiTokenDesc') }}</span>
         </div>
-        <input
-          class="field"
-          type="password"
-          autocomplete="off"
-          spellcheck="false"
-          autocapitalize="off"
-          :placeholder="t('settings.apiTokenPlaceholder')"
-          :value="apiTokenInput"
-          @change="setApiToken($event.target.value)"
-        />
+        <div class="ctl">
+          <input
+            class="field"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            autocapitalize="off"
+            :placeholder="
+              state.config.apiTokenSet
+                ? t('settings.apiTokenSaved')
+                : t('settings.apiTokenPlaceholder')
+            "
+            @change="setEndpoint('apiToken', $event.target.value)"
+          />
+          <button
+            v-if="state.config.apiTokenSet"
+            class="btn btn-sm"
+            @click="setEndpoint('apiToken', '')"
+          >
+            {{ t('settings.apiTokenForget') }}
+          </button>
+        </div>
       </div>
     </section>
 

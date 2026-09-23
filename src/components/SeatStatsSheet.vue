@@ -2,24 +2,20 @@
 /**
  * Four fields, one villain.
  *
- * Typing here does not annotate anything on our side — it writes the stat into
- * the snapshot in the host's own format before that snapshot is parsed or sent
- * (lib/manualStats), so what the solver reads is a HUD line it cannot tell from
- * one the client wrote. That is what the preview at the bottom shows.
+ * Typing here does not annotate anything on our side — the coordinator writes
+ * the stat into the snapshot in the host's own format before that snapshot is
+ * parsed or sent, so what the solver reads is a HUD line it cannot tell from
+ * one the client wrote. That is what the preview at the bottom shows, in the
+ * coordinator's own words for it.
  *
  * A field left empty is not a zero: it is the HUD's own value where there is
  * one — which the placeholder says — and the population average where there is
  * not. Only the fields that carry something are written.
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import InfoSheet from './InfoSheet.vue'
-import { statLine } from '../lib/handBody'
-import {
-  MANUAL_STAT_KEYS,
-  statsFor,
-  setManualStat,
-  clearManualStats,
-} from '../lib/manualStats'
+import { CORE_STATS } from '../lib/stats'
+import { setManualStat, clearManualStats } from '../lib/coordinator'
 import { t } from '../lib/i18n'
 
 const props = defineProps({
@@ -33,28 +29,38 @@ const props = defineProps({
    * it is leaving alone rather than as nothing.
    */
   hud: { type: Object, default: () => ({}) },
+  /** What is typed for this seat, as the coordinator holds it. */
+  typed: { type: Object, default: () => ({}) },
+  /** The lines those values add to every snapshot — the body's own syntax. */
+  lines: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['close'])
 
-const typed = computed(() => statsFor(props.tableIndex, props.name) || {})
+/**
+ * What is in the fields: seeded once, then the fields' own. Every keystroke
+ * goes out as it is typed, and the coordinator's answer to an earlier one must
+ * not put a field back to what it said a keystroke ago.
+ */
+const draft = ref(Object.fromEntries(CORE_STATS.map((k) => [k, props.typed?.[k] ?? ''])))
 
 const rows = computed(() =>
-  MANUAL_STAT_KEYS.map((key) => ({
+  CORE_STATS.map((key) => ({
     key,
     label: key,
     desc: t(`stat.${key}`),
-    value: typed.value[key] ?? '',
+    value: draft.value[key],
     hud: props.hud?.[key] ?? null,
   })),
 )
 
-/** The lines this adds to every snapshot — the body's own syntax, verbatim. */
-const written = computed(() =>
-  MANUAL_STAT_KEYS.filter((k) => typed.value[k] != null).map((k) => statLine(k, typed.value[k])),
-)
-
 function onInput(key, value) {
+  draft.value[key] = value
   setManualStat(props.tableIndex, props.name, key, value)
+}
+
+function clear() {
+  for (const key of CORE_STATS) draft.value[key] = ''
+  clearManualStats(props.tableIndex, props.name)
 }
 </script>
 
@@ -89,15 +95,15 @@ function onInput(key, value) {
     </div>
 
     <div class="foot">
-      <p v-if="written.length" class="wrote">
+      <p v-if="lines.length" class="wrote">
         <span class="eyebrow">{{ t('stats.writes') }}</span>
-        <code>{{ written.join('  ') }}</code>
+        <code>{{ lines.join('  ') }}</code>
       </p>
       <p v-else class="wrote muted">{{ t('stats.noneTyped') }}</p>
       <button
         class="btn btn-sm"
-        :disabled="!written.length"
-        @click="clearManualStats(tableIndex, name)"
+        :disabled="!lines.length"
+        @click="clear"
       >
         {{ t('stats.clear') }}
       </button>

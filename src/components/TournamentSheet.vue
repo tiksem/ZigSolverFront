@@ -2,10 +2,10 @@
 /**
  * Three fields, one tournament.
  *
- * Typing here does not annotate anything on our side — it writes the header
- * into the snapshot in the host's own prose before that snapshot is parsed or
- * sent (lib/manualTournament), so what the solver reads is a header line it
- * cannot tell from one the client wrote. The footer shows the sentence itself.
+ * Typing here does not annotate anything on our side — the coordinator writes
+ * the header into the snapshot in the host's own prose before that snapshot is
+ * parsed or sent, so what the solver reads is a header line it cannot tell from
+ * one the client wrote. The footer shows the clauses themselves.
  *
  * The status line above it is the part worth reading: the endpoint prices under
  * ICM only when the body says both how many are left and how many places pay,
@@ -13,14 +13,10 @@
  * stack. Anything short of that comes back in chips, so the sheet says which of
  * the two answers the header currently buys.
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import InfoSheet from './InfoSheet.vue'
-import { TOURNAMENT_KEYS, TOURNAMENT_WRITE_ORDER, tournamentPhrase } from '../lib/handBody'
-import {
-  tournamentFor,
-  setManualTournament,
-  clearManualTournament,
-} from '../lib/manualTournament'
+import { TOURNAMENT_KEYS } from '../lib/stats'
+import { setManualTournament, clearManualTournament } from '../lib/coordinator'
 import { t } from '../lib/i18n'
 
 const props = defineProps({
@@ -31,10 +27,15 @@ const props = defineProps({
    * alone rather than as nothing.
    */
   host: { type: Object, default: null },
+  /** What is typed for this table, as the coordinator holds it. */
+  typed: { type: Object, default: () => ({}) },
+  /** The clauses those values put in every snapshot, in the order the body carries them. */
+  phrases: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['close'])
 
-const typed = computed(() => tournamentFor(props.tableIndex) || {})
+/** The fields' own values: seeded once, for the same reason as the stats editor's. */
+const draft = ref(Object.fromEntries(TOURNAMENT_KEYS.map((k) => [k, props.typed?.[k] ?? ''])))
 
 const rows = computed(() =>
   TOURNAMENT_KEYS.map((key) => ({
@@ -43,7 +44,7 @@ const rows = computed(() =>
     desc: t(`tourney.desc.${key}`),
     unit: key === 'averageStack' ? 'BB' : null,
     step: key === 'averageStack' ? '0.1' : '1',
-    value: typed.value[key] ?? '',
+    value: draft.value[key],
     host: props.host?.[key] ?? null,
   })),
 )
@@ -51,7 +52,10 @@ const rows = computed(() =>
 /** What the snapshot will actually say — typed where typed, host's otherwise. */
 const effective = computed(() =>
   Object.fromEntries(
-    TOURNAMENT_KEYS.map((key) => [key, typed.value[key] ?? props.host?.[key] ?? null]),
+    TOURNAMENT_KEYS.map((key) => {
+      const v = draft.value[key]
+      return [key, v !== '' && v != null ? v : (props.host?.[key] ?? null)]
+    }),
   ),
 )
 
@@ -65,19 +69,14 @@ const gate = computed(() => {
   return { ok: true, text: t('tourney.icm') }
 })
 
-/**
- * The clauses this adds to every snapshot — the header's own words, verbatim,
- * and in the order the body will carry them rather than the order they are
- * typed in above.
- */
-const written = computed(() =>
-  TOURNAMENT_WRITE_ORDER.filter((k) => typed.value[k] != null).map((k) =>
-    tournamentPhrase(k, typed.value[k]),
-  ),
-)
-
 function onInput(key, value) {
+  draft.value[key] = value
   setManualTournament(props.tableIndex, key, value)
+}
+
+function clear() {
+  for (const key of TOURNAMENT_KEYS) draft.value[key] = ''
+  clearManualTournament(props.tableIndex)
 }
 </script>
 
@@ -113,15 +112,15 @@ function onInput(key, value) {
     <p class="gate" :class="{ ok: gate.ok }">{{ gate.text }}</p>
 
     <div class="foot">
-      <p v-if="written.length" class="wrote">
+      <p v-if="phrases.length" class="wrote">
         <span class="eyebrow">{{ t('tourney.writes') }}</span>
-        <code>{{ written.join(', ') }}</code>
+        <code>{{ phrases.join(', ') }}</code>
       </p>
       <p v-else class="wrote muted">{{ t('tourney.noneTyped') }}</p>
       <button
         class="btn btn-sm"
-        :disabled="!written.length"
-        @click="clearManualTournament(tableIndex)"
+        :disabled="!phrases.length"
+        @click="clear"
       >
         {{ t('tourney.clear') }}
       </button>

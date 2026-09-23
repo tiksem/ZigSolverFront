@@ -19,20 +19,9 @@ import HelpButton from './HelpButton.vue'
 import InfoSheet from './InfoSheet.vue'
 import AdvancedSheet from './AdvancedSheet.vue'
 import PreflopMixSheet from './PreflopMixSheet.vue'
-import {
-  REGIMES,
-  regime as regimeState,
-  MIN_STATS_FOR_EXPLOIT,
-  thinReadReason,
-} from '../lib/regime'
-import {
-  PREFLOP_ENGINES,
-  preflop as preflopState,
-  gtoAvailable,
-  setPreflop,
-  setGtoPct,
-} from '../lib/preflop'
-import { settings } from '../lib/settings'
+import { REGIMES, thinReadReason } from '../lib/regime'
+import { PREFLOP_ENGINES } from '../lib/preflop'
+import { state, meta, selectPreflop } from '../lib/coordinator'
 import { t, tk } from '../lib/i18n'
 
 const props = defineProps({
@@ -40,7 +29,7 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   /** 'gto' | 'exploit' | 'manual' | 'advanced' */
   selected: { type: String, default: 'gto' },
-  /** lib/regime.exploitAvailability for this hand: { status, ok, why }. */
+  /** The coordinator's verdict on this hand: can Exploit answer it? { status, ok, why }. */
   exploit: { type: Object, default: () => ({ status: 'pending', ok: false, why: null }) },
   /** The HUD stats read on this spot's villain — what Advanced's gate looks at. */
   statNames: { type: Array, default: () => [] },
@@ -65,16 +54,16 @@ const pfMix = ref(false)
  */
 function pfInert(value) {
   const spec = PREFLOP_ENGINES.find((e) => e.value === value)
-  return !!(spec && spec.needsService && !gtoAvailable.value)
+  return !!(spec && spec.needsService && !state.gtoAvailable)
 }
 
 function pickPreflop(value) {
   if (pfInert(value)) return
-  if (value === 'advanced' && preflopState.selected === 'advanced') {
+  if (value === 'advanced' && state.preflop.selected === 'advanced') {
     pfMix.value = true
     return
   }
-  setPreflop(value)
+  selectPreflop(value)
   if (value === 'advanced') pfMix.value = true
   else emit('resolve')
 }
@@ -89,13 +78,13 @@ function closePfMix() {
 const helpNs = computed(() => (helpFor.value && helpFor.value.kind === 'preflop' ? 'preflop' : 'regime'))
 
 const pfNote = computed(() => {
-  if (!gtoAvailable.value) return t('preflopBar.noService')
+  if (!state.gtoAvailable) return t('preflopBar.noService')
   const d = props.preflopDrew
   if (d && d.forced) return t('preflopBar.forced', { reason: tk(d.forced) })
-  if (preflopState.selected === 'advanced' && d) {
+  if (state.preflop.selected === 'advanced' && d) {
     return t('preflopBar.drew', { engine: t(`preflop.${d.engine}.short`) })
   }
-  return t(`preflop.${preflopState.selected}.tagline`)
+  return t(`preflop.${state.preflop.selected}.tagline`)
 })
 
 /**
@@ -110,7 +99,7 @@ const inert = (value) =>
 
 /** Advanced's gate on this hand's villain — the coin is skipped under it. */
 const gated = computed(
-  () => regimeState.requireStats && props.statNames.length < MIN_STATS_FOR_EXPLOIT,
+  () => state.regime.requireStats && props.statNames.length < meta.minStatsForExploit,
 )
 
 /**
@@ -149,7 +138,7 @@ const note = computed(() => {
     if (gated.value) {
       return t('regimeBar.advancedRefused', { why: tk(thinReadReason(props.statNames.length)) })
     }
-    const pct = regimeState.exploitPct
+    const pct = state.regime.exploitPct
     // The ends are legal settings and are how the mode is parked; reporting
     // them as a mix would be describing a coin that has only one side.
     if (pct === 0) return t('regimeBar.parkedGto')
@@ -220,7 +209,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <button class="rbtn" :title="t(`regime.${r.value}.tagline`)" @click="pick(r.value)">
             {{ t(`regime.${r.value}.short`) }}
             <span v-if="r.value === 'advanced'" class="mix mono">
-              {{ regimeState.exploitPct }}%
+              {{ state.regime.exploitPct }}%
             </span>
           </button>
           <HelpButton
@@ -247,7 +236,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           v-for="e in PREFLOP_ENGINES"
           :key="e.value"
           class="rwrap"
-          :class="{ on: preflopState.selected === e.value, inert: pfInert(e.value) }"
+          :class="{ on: state.preflop.selected === e.value, inert: pfInert(e.value) }"
         >
           <button
             class="rbtn"
@@ -256,7 +245,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           >
             {{ t(`preflop.${e.value}.short`) }}
             <span v-if="e.value === 'advanced'" class="mix mono">
-              {{ preflopState.gtoPct }}%
+              {{ state.preflop.gtoPct }}%
             </span>
           </button>
           <HelpButton
@@ -267,7 +256,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         </div>
       </div>
 
-      <p class="line" :class="{ warn: !gtoAvailable || (preflopDrew && preflopDrew.forced) }">
+      <p class="line" :class="{ warn: !state.gtoAvailable || (preflopDrew && preflopDrew.forced) }">
         {{ pfNote }}
       </p>
     </section>
@@ -285,9 +274,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           :title="t('regimeBar.solveSettings')"
           @click="emit('settings')"
         >
-          <span class="mono">{{ settings.maxSolveTime }}s</span>
-          <span v-if="!settings.autoSolve" class="flag">{{ t('regimeBar.manualSend') }}</span>
-          <span v-if="!settings.useHandCache" class="flag">{{ t('regimeBar.noCache') }}</span>
+          <span class="mono">{{ state.settings.maxSolveTime }}s</span>
+          <span v-if="!state.settings.autoSolve" class="flag">{{ t('regimeBar.manualSend') }}</span>
+          <span v-if="!state.settings.useHandCache" class="flag">{{ t('regimeBar.noCache') }}</span>
           <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden="true">
             <path
               d="M5 7.5 L10 12.5 L15 7.5"

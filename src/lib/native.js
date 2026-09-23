@@ -11,17 +11,14 @@
  *     window.__ZIGSOLVER__ = { api: "http://127.0.0.1:53411", token: "…", … }
  *
  * So under the shell there is no ZigSolver API to type — there is one, it is
- * this process's own, and the token is the only thing on the machine that can
- * spend it. Two consequences the UI acts on:
- *
- *   * the API field is not shown (ConnectView, SettingsSheet). The bot host is
- *     still typed, because that one really is somewhere else.
- *   * every call to the API carries `Authorization: Bearer …`. Nothing else
- *     does: the bot host is the user's own and has no token.
+ * that process's own. The page no longer calls it: the coordinator does
+ * (lib/coordinator.js), so the endpoint and the token are handed on to it, and
+ * the connect screen and the settings sheet show the solver as embedded rather
+ * than as a field.
  *
  * In a browser the global is absent and everything below reads as null, which
  * is what keeps `npm run dev` and the bundle the Kotlin server serves working
- * exactly as they did — an API without a token, typed by hand.
+ * exactly as they did.
  */
 
 /** Cap what we will accept out of the global, so a malformed one reads as absent. */
@@ -34,7 +31,7 @@ function read() {
   if (!raw || typeof raw !== 'object') return null
   const api = text(raw.api, 200)
   // Without an endpoint there is nothing the shell is telling us that the
-  // normal two-field flow does not already do better.
+  // normal flow does not already do better.
   if (!api) return null
   return Object.freeze({
     /** Absolute base URL of the app's own solver, e.g. `http://127.0.0.1:53411`. */
@@ -54,44 +51,6 @@ export const nativeShell = read()
 /** Shorthand for the many `v-if`s that only ask whether there is one. */
 export const isNative = !!nativeShell
 
-/**
- * The API token typed on the connect screen, in a browser.
- *
- * A deployed API can require one (`api/server.py --auth-token`, which guards
- * its whole surface, /health included), and a page that sends no Authorization
- * then gets a 401 on every call and reports the solver as unreachable. So the
- * endpoint has an optional credential beside it.
- *
- * It is kept here rather than in lib/server.js, which owns the ref and its
- * persistence, so that apiHeaders() below stays the ONE place a token is ever
- * attached to a request; lib/server.js pushes the value in as it changes.
- * Empty is the ordinary case — an API without a token wants no header at all.
- */
-let typedToken = ''
-
-/** Set by lib/server.js when the typed token is read or changed. */
-export function setTypedApiToken(value) {
-  typedToken = typeof value === 'string' && value.length <= 512 ? value.trim() : ''
-}
-
-/**
- * `headers` plus the API's Authorization, when there is a token.
- *
- * Every fetch at the ZigSolver API goes through this — /move, /cancel, /health
- * and /screenError — and nothing else does. Calls at the BOT HOST must not: the
- * token belongs to the solver, and sending it to a host the user typed would be
- * handing it to a third party.
- *
- * The shell's token wins wherever there is one: it is the credential for the
- * solver THIS app started, minted for the launch, and under the shell there is
- * no second endpoint to point at.
- */
-export function apiHeaders(headers) {
-  const token = (nativeShell && nativeShell.token) || typedToken
-  if (!token) return headers ? { ...headers } : {}
-  return { ...(headers || {}), Authorization: `Bearer ${token}` }
-}
-
 /** The shell's message port, or null when there is not one. */
 function bridge() {
   try {
@@ -104,9 +63,9 @@ function bridge() {
 /**
  * Tell the shell the bot host changed, so the next launch starts on it.
  *
- * localStorage would do it for a browser, but the app also wants the value for
- * its own window title and for the field it shows before the page is up.
- * Absent handler (a browser, an older shell) = nothing happens.
+ * The app wants the value for its own window title and for the field it shows
+ * before the page is up. Absent handler (a browser, an older shell) = nothing
+ * happens.
  */
 export function reportHost(host) {
   bridge()?.postMessage({ type: 'host', host: String(host || '') })

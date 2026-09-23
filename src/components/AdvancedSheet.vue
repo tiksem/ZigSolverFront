@@ -13,16 +13,11 @@
  */
 import { computed } from 'vue'
 import InfoSheet from './InfoSheet.vue'
-import {
-  regime,
-  setExploitPct,
-  setRequireStats,
-  MIN_STATS_FOR_EXPLOIT,
-} from '../lib/regime'
+import { state, meta, setExploitPct, setRequireStats } from '../lib/coordinator'
 import { t, tp, tk } from '../lib/i18n'
 
 const props = defineProps({
-  /** lib/regime.exploitAvailability for this hand: { status, ok, why }. */
+  /** The coordinator's verdict on this hand: can Exploit answer it? { status, ok, why }. */
   exploit: { type: Object, default: () => ({ status: 'pending', ok: false, why: null }) },
   /** The HUD stats read on this hand's villain, so the gate says what it is gating. */
   statNames: { type: Array, default: () => [] },
@@ -31,7 +26,7 @@ const emit = defineEmits(['close'])
 
 const PRESETS = [0, 25, 50, 75, 100]
 
-const gtoPct = computed(() => 100 - regime.exploitPct)
+const gtoPct = computed(() => 100 - state.regime.exploitPct)
 
 /** What the gate does to the hand on screen, in one line. */
 const gateNote = computed(() => {
@@ -44,7 +39,7 @@ const gateNote = computed(() => {
   const n = props.statNames.length
   if (n === 0) return t('advanced.gateNone')
   const list = props.statNames.join(', ')
-  return n < MIN_STATS_FOR_EXPLOIT
+  return n < meta.minStatsForExploit
     ? tp('advanced.gateThin', n, { list })
     : tp('advanced.gateOk', n, { list })
 })
@@ -52,9 +47,9 @@ const gateNote = computed(() => {
 /** Warn only where the gate is actually costing this hand its draw. */
 const gateWarn = computed(
   () =>
-    regime.requireStats &&
+    state.regime.requireStats &&
     (props.exploit.status === 'no' ||
-      (props.exploit.ok && props.statNames.length < MIN_STATS_FOR_EXPLOIT)),
+      (props.exploit.ok && props.statNames.length < meta.minStatsForExploit)),
 )
 </script>
 
@@ -77,7 +72,7 @@ const gateWarn = computed(
               {{ t('regime.gto.title') }} <b class="mono">{{ gtoPct }}%</b>
             </span>
             <span class="end exp">
-              <b class="mono">{{ regime.exploitPct }}%</b> {{ t('regime.exploit.title') }}
+              <b class="mono">{{ state.regime.exploitPct }}%</b> {{ t('regime.exploit.title') }}
             </span>
           </div>
           <input
@@ -87,7 +82,7 @@ const gateWarn = computed(
             max="100"
             step="5"
             :aria-label="t('advanced.sliderLabel')"
-            :value="regime.exploitPct"
+            :value="state.regime.exploitPct"
             @input="setExploitPct($event.target.value)"
           />
           <div class="presets">
@@ -95,7 +90,7 @@ const gateWarn = computed(
               v-for="p in PRESETS"
               :key="p"
               class="preset"
-              :class="{ on: regime.exploitPct === p }"
+              :class="{ on: state.regime.exploitPct === p }"
               @click="setExploitPct(p)"
             >
               {{ p }}%
@@ -106,13 +101,13 @@ const gateWarn = computed(
 
       <div class="row">
         <div class="lab">
-          <strong>{{ t('advanced.gate', { n: MIN_STATS_FOR_EXPLOIT }) }}</strong>
-          <span class="desc">{{ t('advanced.gateDesc', { n: MIN_STATS_FOR_EXPLOIT }) }}</span>
+          <strong>{{ t('advanced.gate', { n: meta.minStatsForExploit }) }}</strong>
+          <span class="desc">{{ t('advanced.gateDesc', { n: meta.minStatsForExploit }) }}</span>
         </div>
         <input
           class="switch"
           type="checkbox"
-          :checked="regime.requireStats"
+          :checked="state.regime.requireStats"
           @change="setRequireStats($event.target.checked)"
         />
       </div>

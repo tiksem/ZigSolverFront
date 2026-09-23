@@ -14,7 +14,7 @@
  * that way, so there is nothing here to gate on.
  */
 import InfoSheet from './InfoSheet.vue'
-import { preflop, setGtoPct, gtoAvailable } from '../lib/preflop'
+import { state, setGtoPct } from '../lib/coordinator'
 import { t } from '../lib/i18n'
 
 const emit = defineEmits(['close'])
@@ -38,10 +38,10 @@ const PRESETS = [0, 25, 50, 75, 100]
         <div class="mix">
           <div class="scale">
             <span class="end alg">
-              {{ t('preflop.alg.title') }} <b class="mono">{{ 100 - preflop.gtoPct }}%</b>
+              {{ t('preflop.alg.title') }} <b class="mono">{{ 100 - state.preflop.gtoPct }}%</b>
             </span>
             <span class="end gto">
-              <b class="mono">{{ preflop.gtoPct }}%</b> {{ t('preflop.gto.title') }}
+              <b class="mono">{{ state.preflop.gtoPct }}%</b> {{ t('preflop.gto.title') }}
             </span>
           </div>
           <input
@@ -51,7 +51,7 @@ const PRESETS = [0, 25, 50, 75, 100]
             max="100"
             step="5"
             :aria-label="t('preflopMix.sliderLabel')"
-            :value="preflop.gtoPct"
+            :value="state.preflop.gtoPct"
             @input="setGtoPct($event.target.value)"
           />
           <div class="presets">
@@ -59,7 +59,7 @@ const PRESETS = [0, 25, 50, 75, 100]
               v-for="p in PRESETS"
               :key="p"
               class="preset"
-              :class="{ on: preflop.gtoPct === p }"
+              :class="{ on: state.preflop.gtoPct === p }"
               @click="setGtoPct(p)"
             >
               {{ p }}%
@@ -68,7 +68,7 @@ const PRESETS = [0, 25, 50, 75, 100]
         </div>
       </div>
 
-      <p v-if="!gtoAvailable" class="warn">{{ t('preflopBar.noService') }}</p>
+      <p v-if="!state.gtoAvailable" class="warn">{{ t('preflopBar.noService') }}</p>
     </section>
   </InfoSheet>
 </template>

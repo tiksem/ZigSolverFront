@@ -7,6 +7,11 @@
  * the end when the host sent the snapshot it ended on — every decision's answer
  * exactly as the panel showed it, and the ranges the hand was solved on.
  *
+ * The coordinator keeps the history, so it is read from there: the list light,
+ * and a hand in full only once it is opened. `rev` moves whenever the table's
+ * history does (an answer filed, a hand ended, a trim, a clear), and both are
+ * read again.
+ *
  * The pieces are the live ones (HandDetails, SolverPanel, RangesView), so a
  * past hand reads the way the table did while it was being played. Any decision
  * can also go back on the felt itself (`open`), which is the table view's job.
@@ -17,9 +22,8 @@ import PlayingCard from './PlayingCard.vue'
 import HandDetails from './HandDetails.vue'
 import SolverPanel from './SolverPanel.vue'
 import RangesView from './RangesView.vue'
-import { handsFor, findHand, bodyOf, rangesAt, clearHistory } from '../lib/history'
-import { parseHandBody } from '../lib/handBody'
-import { ACTION_TONE, actionKind } from '../lib/moveResult'
+import { fetchHistory, fetchHand, clearHistory } from '../lib/coordinator'
+import { ACTION_TONE, actionKind } from '../lib/answerFormat'
 import { REGIME_BY_VALUE } from '../lib/regime'
 import { locale, t, tp, tv } from '../lib/i18n'
 
@@ -27,11 +31,15 @@ const props = defineProps({
   tableIndex: { type: Number, required: true },
   /** The decision the felt is showing, if it is showing one. */
   current: { type: String, default: null },
+  /** The table's history revision — a change is the cue to read it again. */
+  rev: { type: Number, default: 0 },
 })
 const emit = defineEmits(['close', 'open'])
 
-const hands = computed(() => handsFor(props.tableIndex))
-const decisions = computed(() => hands.value.reduce((n, h) => n + h.entries.length, 0))
+/** Every hand, light — what the list draws. Null until the first read lands. */
+const list = ref(null)
+const hands = computed(() => list.value?.hands || [])
+const decisions = computed(() => list.value?.decisions || 0)
 
 // --- which hand is open -----------------------------------------------------
 
@@ -39,28 +47,56 @@ const decisions = computed(() => hands.value.reduce((n, h) => n + h.entries.leng
 const openKey = ref(null)
 /** The decision to bring into view once the hand is drawn. */
 const focusId = ref(null)
+/** The open hand: its record parsed, every answer, and the ranges behind each. */
+const hand = ref(null)
 
-// Opened while a past decision is on the felt: start on that decision's hand,
-// which is the one the operator is reading.
-if (props.current) {
-  const h = hands.value.find((x) => x.entries.some((e) => e.id === props.current))
-  if (h) {
-    openKey.value = h.key
-    focusId.value = props.current
+async function loadList() {
+  try {
+    list.value = await fetchHistory(props.tableIndex)
+  } catch {
+    list.value = list.value || { hands: [], decisions: 0 }
   }
 }
 
-const hand = computed(() => (openKey.value ? findHand(props.tableIndex, openKey.value) : null))
+async function loadHand() {
+  const key = openKey.value
+  if (!key) {
+    hand.value = null
+    return
+  }
+  let full = null
+  try {
+    full = await fetchHand(props.tableIndex, key)
+  } catch {
+    full = null
+  }
+  if (openKey.value !== key) return
+  // A hand cleared or trimmed away under the open view goes back to the list.
+  if (!full) openKey.value = null
+  hand.value = full
+}
+
+// Opened while a past decision is on the felt: start on that decision's hand,
+// which is the one the operator is reading.
+loadList().then(() => {
+  if (!props.current || openKey.value) return
+  const h = hands.value.find((x) => x.entries.some((e) => e.id === props.current))
+  if (h) openHand(h.key, props.current)
+})
+
+watch(openKey, loadHand)
+watch(
+  () => props.rev,
+  () => {
+    loadList()
+    loadHand()
+  },
+)
 
 function openHand(key, entryId = null) {
   openKey.value = key
   focusId.value = entryId
 }
-
-// A hand cleared or trimmed away under the open view goes back to the list.
-watch(hand, (h) => {
-  if (openKey.value && !h) openKey.value = null
-})
 
 watch(
   [hand, focusId],
@@ -74,17 +110,14 @@ watch(
 
 /**
  * The fullest snapshot of the open hand — how it ended when the host said, the
- * last decision asked otherwise — parsed for HandDetails.
+ * last decision asked otherwise — already parsed, for HandDetails.
  */
-const record = computed(() => (hand.value ? parseHandBody(bodyOf(hand.value.last)) : null))
+const record = computed(() => hand.value?.record || null)
 
 const heroPosition = computed(() => record.value?.hero?.position || null)
 
 /** Every street the hand has ranges for, as of its last decision. */
-const handRanges = computed(() => {
-  const h = hand.value
-  return h ? rangesAt(props.tableIndex, h.entries[h.entries.length - 1]) : []
-})
+const handRanges = computed(() => hand.value?.ranges || [])
 
 // --- formatting -------------------------------------------------------------
 
@@ -189,7 +222,7 @@ function clear() {
       <SolverPanel
         :result="e.result"
         :regime="e.result.request?.regime || 'gto'"
-        :ranges="rangesAt(tableIndex, e)"
+        :ranges="e.ranges"
       />
     </div>
 
@@ -213,7 +246,7 @@ function clear() {
     "
     @close="emit('close')"
   >
-    <p v-if="!hands.length" class="gone">{{ t('history.empty') }}</p>
+    <p v-if="list && !hands.length" class="gone">{{ t('history.empty') }}</p>
 
     <section v-for="h in hands" :key="h.key" class="hand">
       <button class="hhead" :title="t('history.openHand')" @click="openHand(h.key)">

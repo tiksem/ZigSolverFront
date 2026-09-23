@@ -1,27 +1,15 @@
 /**
- * The ranges a solve ran on: the chart, and the hand's history of them.
+ * How a range is drawn: the 13x13 chart, and the combos the board leaves.
  *
- * `meta.ranges` is one entry per seat of the game that was SOLVED, each with a
- * class map — `{ "AA": 1, "AKs": 0.85, ... }` — that the API has already
- * averaged over the combos the board leaves live. So a cell's weight is "how
- * much of this hand the range holds", and the combo count beside it is how many
- * ways there are left to hold it. Both halves are needed: a class the board has
- * taken two of is not half as likely, it is the same hand with fewer combos.
- *
- * It is absent wherever the answer was not computed from enumerated ranges —
- * both preflop engines and the exploit regime, which never builds villain's
- * range at all. That is a fact about the answer rather than a gap in it, so the
- * sheet says which one it is instead of drawing an empty chart.
- *
- * The STREET tabs are built here rather than asked for: every street of a hand
- * is a separate /move call, and each one reports the ranges it was actually
- * answered on. Keeping them as they arrive is what makes "how did the turn card
- * narrow this" a thing you can look at, and it costs no extra solve — the
- * alternative, asking the endpoint for every street on every call, would price
- * a narrowing nobody has asked to see.
+ * The ranges themselves arrive from the coordinator, already read off the
+ * answers and collected street by street (`table.ranges`, and a past decision's
+ * from the history). Each player's class map — `{ "AA": 1, "AKs": 0.85, ... }`
+ * — is what the API averaged over the combos the board leaves live, so a cell's
+ * weight is "how much of this hand the range holds", and the combo count beside
+ * it is how many ways there are left to hold it. Both halves are needed: a class
+ * the board has taken two of is not half as likely, it is the same hand with
+ * fewer combos.
  */
-
-import { reactive } from 'vue'
 
 export const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2']
 const SUITS = ['s', 'h', 'd', 'c']
@@ -41,9 +29,8 @@ export const GRID = (() => {
   const out = []
   for (let row = 0; row < 13; row += 1) {
     for (let col = 0; col < 13; col += 1) {
-      const key = cellKey(row, col)
       out.push({
-        key,
+        key: cellKey(row, col),
         row,
         col,
         kind: row === col ? 'pair' : row < col ? 'suited' : 'offsuit',
@@ -52,14 +39,6 @@ export const GRID = (() => {
   }
   return out
 })()
-
-/** 'Ks 8d 3d 7c' -> ['Ks', '8d', '3d', '7c']. Tolerates commas and case. */
-export function boardCards(board) {
-  if (Array.isArray(board)) return board.filter(Boolean).map(String)
-  return String(board || '')
-    .split(/[\s,]+/)
-    .filter(Boolean)
-}
 
 /** The suits of `rank` no board card has taken. */
 function liveSuits(rank, dead) {
@@ -97,97 +76,6 @@ export function chartOf(weights, dead) {
 }
 
 /**
- * `meta.ranges` off an answer, or null.
- *
- * Shape-checked rather than trusted: an older API answers without the block at
- * all, and the sheet's empty state is a sentence about the regime, not a crash.
- */
-export function readRanges(result) {
-  const block = result?.meta?.ranges
-  if (!block || !Array.isArray(block.players) || !block.players.length) return null
-  return {
-    source: block.source || null,
-    rootedAt: block.rootedAt || null,
-    board: boardCards(block.board ?? result?.meta?.board),
-    players: block.players.map((p, i) => ({
-      key: p.name || p.label || `#${i}`,
-      name: p.name || p.label || `#${i}`,
-      label: p.label || p.name || `#${i}`,
-      position: p.position || null,
-      seat: p.seat || null,
-      hero: !!p.hero,
-      combos: Number(p.combos) || 0,
-      widthPct: Number(p.widthPct) || 0,
-      weights: p.weights && typeof p.weights === 'object' ? p.weights : {},
-    })),
-  }
-}
-
-// --- the hand's streets, as they arrive --------------------------------------
-
-/**
- * Per table: the hand being watched, and one record per street of it that has
- * come back carrying ranges.
- *
- * Keyed by handId so a new hand replaces rather than accumulates — and a street
- * re-solved (a re-read, a regime change, a stat typed) overwrites its own
- * record, since the question was re-asked and the old ranges are no longer the
- * ones behind the answer on screen.
- */
-const store = reactive({})
-
-const streetIndex = (s) => {
-  const at = STREETS.indexOf(String(s))
-  return at < 0 ? STREETS.length : at
-}
-
-/**
- * One street's record off an answer, or null when it carries no ranges.
- *
- * Shared with the solve history (lib/history.js), which rebuilds a past hand's
- * streets from the answers it kept rather than from this store.
- */
-export function rangeRecord(result, at = Date.now()) {
-  if (result?.type !== 'answer') return null
-  const ranges = readRanges(result)
-  if (!ranges) return null
-  return {
-    street: result.street || ranges.rootedAt || 'flop',
-    at,
-    solver: result.solver || null,
-    ...ranges,
-  }
-}
-
-/** Records in street order, earliest first. */
-export function sortStreets(records) {
-  return [...records].sort((a, b) => streetIndex(a.street) - streetIndex(b.street))
-}
-
-/** File an answer's ranges under the hand it was asked about. */
-export function recordRanges(tableIndex, handId, result) {
-  const record = rangeRecord(result)
-  if (!record) return
-  const key = String(tableIndex)
-  const hand = handId || 'unknown'
-  const held = store[key]
-  if (!held || held.handId !== hand) store[key] = { handId: hand, streets: {} }
-  store[key].streets[record.street] = record
-}
-
-/** This table's records, earliest street first. Empty when there are none. */
-export function rangeStreets(tableIndex) {
-  const held = store[String(tableIndex)]
-  if (!held) return []
-  return sortStreets(Object.values(held.streets))
-}
-
-/** Drop what is kept for a table — a new hand, or a table left behind. */
-export function clearRanges(tableIndex) {
-  delete store[String(tableIndex)]
-}
-
-/**
  * Why THIS answer carries no ranges, as a message key — or null when it does.
  *
  * Every case is a real property of the regime that ran rather than a failure,
@@ -197,7 +85,9 @@ export function clearRanges(tableIndex) {
  * enumerates villain's range).
  */
 export function whyNoRanges(result) {
-  if (result?.type !== 'answer' || readRanges(result)) return null
+  if (result?.type !== 'answer') return null
+  const players = result.meta?.ranges?.players
+  if (Array.isArray(players) && players.length) return null
   if (result.regime === 'exploit') return 'ranges.noneExploit'
   if (result.street === 'preflop') return 'ranges.nonePreflop'
   return 'ranges.noneOther'

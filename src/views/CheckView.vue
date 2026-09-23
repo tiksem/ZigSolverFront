@@ -4,14 +4,24 @@
  * check.html submitted (image, check2, crop, tableIndex), except the response
  * is rendered inline instead of replacing the page, so you can iterate on a
  * crop without re-picking the file.
+ *
+ * The upload goes through the coordinator, which is what talks to the bot host
+ * now: the image travels to it on the socket, and it posts the multipart and
+ * sends back whatever the host answered — an image, or text.
  */
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import AppNav from '../components/AppNav.vue'
-import { serverInput, server, setServer, httpUrl, displayHost } from '../lib/server'
 import { persistentRef, asBoolean, asString } from '../lib/persist'
 import { t } from '../lib/i18n'
+import { link, state, looksLikeAddress, setEndpoint, checkScreenshot } from '../lib/coordinator'
 
-const draft = ref(serverInput.value)
+const draft = ref(state.config.host)
+watch(
+  () => state.config.host,
+  (v) => {
+    if (v && v !== draft.value) draft.value = v
+  },
+)
 const file = ref(null)
 const previewUrl = ref(null)
 // The three request options are remembered; the image is not. Iterating on a
@@ -29,13 +39,33 @@ const resultUrl = ref(null)
 const resultText = ref(null)
 const elapsed = ref(null)
 
-const canSubmit = computed(() => !!file.value && !!server.value && !busy.value)
+const canSubmit = computed(
+  () => !!file.value && link.ready && looksLikeAddress(draft.value) && !busy.value,
+)
 
 const cropValid = computed(() => {
   const t = crop.value.trim()
   if (!t) return true
   return /^\s*\d+\s*(,\s*\d+\s*){3}$/.test(t)
 })
+
+/** A File -> base64, for the trip over the socket. The bytes are not touched. */
+function toBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+}
+
+/** Base64 back into a Blob the page can show. */
+function fromBase64(text, type) {
+  const binary = atob(text)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new Blob([bytes], { type: type || 'application/octet-stream' })
+}
 
 function revoke(url) {
   if (url) URL.revokeObjectURL(url)
@@ -70,12 +100,13 @@ async function submit() {
     error.value = t('check.badCrop')
     return
   }
-  setServer(draft.value)
-  const url = httpUrl('/checkScreenshot')
-  if (!url) {
+  if (!looksLikeAddress(draft.value)) {
     error.value = t('check.noServer')
     return
   }
+  // The bot host is the coordinator's setting; typing another one here changes
+  // it, the way it always has.
+  if (draft.value.trim() !== state.config.host) setEndpoint('host', draft.value.trim())
 
   busy.value = true
   error.value = null
@@ -84,27 +115,26 @@ async function submit() {
   resultText.value = null
   const started = performance.now()
 
-  const body = new FormData()
-  body.append('image', file.value, file.value.name || 'screenshot.png')
-  if (check2.value) body.append('check2', 'true')
-  if (crop.value.trim()) body.append('crop', crop.value.trim())
-  if (tableIndex.value !== '') body.append('tableIndex', String(tableIndex.value))
-
   try {
-    const res = await fetch(url, { method: 'POST', body })
-    const type = res.headers.get('content-type') || ''
-    if (!res.ok) {
-      error.value = `${res.status} ${res.statusText} — ${(await res.text()).slice(0, 600)}`
+    const out = await checkScreenshot({
+      image: await toBase64(file.value),
+      filename: file.value.name || 'screenshot.png',
+      mime: file.value.type || '',
+      check2: check2.value,
+      crop: crop.value.trim(),
+      tableIndex: tableIndex.value === '' ? null : String(tableIndex.value),
+    })
+    if (!out.ok) {
+      error.value = `${out.status} ${out.statusText} — ${(out.text || '').slice(0, 600)}`
       return
     }
-    if (type.startsWith('image/')) {
-      resultUrl.value = URL.createObjectURL(await res.blob())
+    if (out.image) {
+      resultUrl.value = URL.createObjectURL(fromBase64(out.image, out.contentType))
     } else {
-      const text = await res.text()
-      resultText.value = text || t('check.emptyResponse')
+      resultText.value = out.text || t('check.emptyResponse')
     }
   } catch (e) {
-    error.value = t('check.failed', { error: e })
+    error.value = t('check.failed', { error: e.message || e })
   } finally {
     elapsed.value = Math.round(performance.now() - started)
     busy.value = false
@@ -131,7 +161,7 @@ onBeforeUnmount(() => {
   <div class="wrap" @paste="onPaste">
     <AppNav
       :title="t('check.navTitle')"
-      :subtitle="displayHost()"
+      :subtitle="state.config.hostDisplay"
       :back="{ name: 'connect' }"
     />
 

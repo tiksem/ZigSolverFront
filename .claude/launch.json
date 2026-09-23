@@ -12,6 +12,17 @@
       "autoPort": true
     },
     {
+      "name": "coordinator",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--directory",
+        "../ZigSolverCoordinator",
+        "zigsolver-coordinator"
+      ],
+      "port": 8765
+    },
+    {
       "name": "mock-hosts",
       "runtimeExecutable": "node",
       "runtimeArgs": [

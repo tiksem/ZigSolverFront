@@ -1,16 +1,15 @@
 <script setup>
 import { computed } from 'vue'
 import PlayingCard from './PlayingCard.vue'
-import { CORE_STATS } from '../lib/handBody'
-import { statsFor } from '../lib/manualStats'
+import { CORE_STATS } from '../lib/stats'
 import { t } from '../lib/i18n'
 
 const props = defineProps({
   seat: { type: Object, required: true },
   isButton: { type: Boolean, default: false },
   toAct: { type: Boolean, default: false },
-  /** Which table's typed stats these are — they are kept per table. */
-  tableIndex: { type: Number, default: null },
+  /** What the operator typed for this seat — the coordinator keeps them per table. */
+  typedStats: { type: Object, default: () => ({}) },
   /** Whether this seat's stats can be typed by hand (villains only). */
   editable: { type: Boolean, default: false },
 })
@@ -45,10 +44,8 @@ const action = computed(() => {
   }
 })
 
-/** What was typed for this seat — the same lookup that put it in the body. */
-const typed = computed(() =>
-  props.editable ? statsFor(props.tableIndex, props.seat.name) || {} : {},
-)
+/** What was typed for this seat — the same values the coordinator wrote into the body. */
+const typed = computed(() => (props.editable ? props.typedStats || {} : {}))
 
 /**
  * The four the HUD leads with. A typed one is marked: it is already in the

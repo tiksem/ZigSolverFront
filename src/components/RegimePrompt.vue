@@ -10,7 +10,7 @@
  * answer rather than asking again, and preflop is never asked about because the
  * preflop algorithm plays it either way. And only where the choice is real — a
  * hand the exploit regime cannot answer goes straight to GTO without asking
- * (see lib/regime.exploitAvailability).
+ * (the coordinator's regime.exploit_availability).
  */
 import { computed } from 'vue'
 import { t, tv } from '../lib/i18n'

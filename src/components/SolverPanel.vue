@@ -15,7 +15,7 @@ import InfoSheet from './InfoSheet.vue'
 import RangesSheet from './RangesSheet.vue'
 import { describeSolver, describeFlow, decisionLabel } from '../lib/solvers'
 import { REGIME_BY_VALUE } from '../lib/regime'
-import { ACTION_TONE, pct } from '../lib/moveResult'
+import { ACTION_TONE, pct } from '../lib/answerFormat'
 import { whyNoRanges } from '../lib/ranges'
 import { t, tp, tv, tk } from '../lib/i18n'
 
@@ -28,7 +28,7 @@ const props = defineProps({
   regime: { type: String, default: 'gto' },
   /**
    * The ranges this HAND has been solved on, one record per street that came
-   * back carrying them (lib/ranges.rangeStreets). Not read off `result`: the
+   * back carrying them (the coordinator's `table.ranges`). Not read off `result`: the
    * point of the sheet is the streets BEFORE the one on screen.
    */
   ranges: { type: Array, default: () => [] },

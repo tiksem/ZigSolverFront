@@ -9,7 +9,7 @@ import RangesView from './RangesView.vue'
 import { t } from '../lib/i18n'
 
 const props = defineProps({
-  /** The hand's records, earliest street first (lib/ranges.rangeStreets). */
+  /** The hand's records, earliest street first (the coordinator's `table.ranges`). */
   streets: { type: Array, default: () => [] },
   /** The street to open on — the one the answer on screen was given for. */
   street: { type: String, default: null },

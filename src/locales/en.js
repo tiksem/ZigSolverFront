@@ -55,12 +55,19 @@ export default {
     notConnected: 'Not connected',
     heading: 'Tables',
     lede:
-      'Connect to a running bot host to list its tables. Each table’s snapshots are sent ' +
-      'straight to the ZigSolver API, and its answer is what you read.',
+      'Connect to a running bot host to list its tables. The coordinator prepares each ' +
+      'table’s snapshots for the ZigSolver API, and its answer is what you read.',
+    coordinator: 'Coordinator',
+    coordinatorApply: 'Use',
+    coordinatorReady: 'connected',
+    coordinatorHint:
+      'Nothing answers there. Start it from the ZigSolverCoordinator checkout — ' +
+      '<code>uv run zigsolver-coordinator</code> — or point this field at where it runs.',
     botHost: 'Bot host',
     api: 'ZigSolver API',
     apiToken: 'API token',
     apiTokenPlaceholder: 'only if the API requires one',
+    apiTokenSaved: 'saved — type to replace',
     optional: 'optional',
     connect: 'Connect',
     disconnect: 'Disconnect',
@@ -75,9 +82,8 @@ export default {
     flopDevice: 'flop {device}',
     unreachable: 'Could not reach {url}',
     unreachableHint:
-      'The API is either not running there, or running without CORS headers — a browser ' +
-      'refuses a cross-origin response that has none. Add CORSMiddleware to api/server.py, ' +
-      'or serve this app from the API’s origin.',
+      'The coordinator could not reach the API there: it is not running, the address is ' +
+      'wrong, or it wants a token (--auth-token) that has not been given.',
     runningTables: 'Running tables',
     table: 'Table {index}',
     waitingBroadcast: 'Connected — waiting for the <code>Indexes:</code> broadcast.',
@@ -100,6 +106,11 @@ export default {
     solverSolving: 'Solver · solving',
     solverError: 'Solver · error',
     solverReady: 'Solver · ready',
+    coordinatorStatus: 'Coordinator · {status}',
+    connectingCoordinator: 'Connecting to the coordinator at {address}',
+    connectingCoordinatorNote:
+      'It holds the table’s socket and runs the solves; this page only draws them. The ' +
+      'connection retries on its own — start the coordinator, or fix its address in the settings.',
     connecting: 'Connecting to {host}',
     connectingNote:
       'The table socket retries automatically. If the table is not running the host replies ' +
@@ -127,7 +138,7 @@ export default {
       'with the snapshot it was asked on.',
     rejected: 'Rejected',
     note:
-      'Kept in this browser, per table, up to the last 150 decisions. Open a hand for its ' +
+      'Kept by the coordinator, per table, up to the last 150 decisions. Open a hand for its ' +
       'players, action, answers and ranges; the live table keeps solving underneath.',
     clear: 'Clear history',
     clearConfirm: 'Click again to clear',
@@ -245,7 +256,7 @@ export default {
     drew: ' This hand drew {regime}.',
   },
 
-  /** The refusals lib/regime.js hands back, rendered wherever they are quoted. */
+  /** The refusals the coordinator hands back, rendered wherever they are quoted. */
   reason: {
     headsUpTable: 'a two-handed table is outside the models’ training data',
     multiwayFlop: 'the flop was {count}-way and the models are heads-up postflop',
@@ -571,19 +582,27 @@ export default {
       'above it is clamped, and the answer says so.',
     serverDefault: 'server default',
     endpointsGroup: 'Endpoints',
+    coordinator: 'Coordinator',
+    coordinatorDesc:
+      'Where ZigSolverCoordinator runs — the one server this page talks to. Kept in this ' +
+      'browser; everything else on this sheet is kept by the coordinator.',
     botHost: 'Bot host',
-    botHostDesc: 'The runner’s WebSocket, and the screenshot check upload.',
+    botHostDesc:
+      'The runner the coordinator connects to: its table sockets, its screenshots and the ' +
+      'screenshot check.',
     api: 'ZigSolver API',
-    apiDesc: 'Where snapshots are POSTed. Changing it applies to the next solve.',
+    apiDesc: 'Where the coordinator POSTs the snapshots. Changing it applies to the next solve.',
     apiEmbeddedDesc:
       'The solver this app started, on loopback and behind a token minted for ' +
       'this launch. Nothing else on the machine can reach it, and there is no ' +
       'other one to point at.',
     apiToken: 'API token',
     apiTokenDesc:
-      'Sent as “Authorization: Bearer …” with every call. Needed only for an ' +
-      'API started with --auth-token; leave it empty otherwise.',
+      'The coordinator sends it as “Authorization: Bearer …” with every call to the API, ' +
+      'and never back to a page. Needed only for an API started with --auth-token.',
     apiTokenPlaceholder: 'only if the API requires one',
+    apiTokenSaved: 'saved — type to replace',
+    apiTokenForget: 'Forget',
     reset: 'Reset solve settings',
   },
 
@@ -698,16 +717,23 @@ export default {
     emptyResponse: '(empty response)',
     badCrop: 'Crop must be four comma-separated integers, e.g. 100,80,640,480',
     noServer: 'Set a server URL first',
-    failed: 'Request failed: {error}. Check the host and that it allows this origin.',
+    failed: 'Request failed: {error}. Check the bot host address and that the coordinator is connected.',
+  },
+
+  // --- the coordinator's socket -------------------------------------------
+  coordinator: {
+    offline: 'Not connected to the coordinator',
+    lost: 'The connection to the coordinator was lost',
+    timeout: 'The coordinator did not answer',
+    refused: 'The coordinator refused the request',
   },
 
   // --- API client --------------------------------------------------------
   api: {
     unreachable: 'Could not reach the ZigSolver API at {url}',
     unreachableHint:
-      'Either the API is not running there, or it is running but does not send CORS headers — ' +
-      'a browser refuses a cross-origin response without them. See the README: add ' +
-      'CORSMiddleware to api/server.py, or serve this app from the same origin as the API.',
+      'The coordinator could not reach it: either the API is not running at that address, or ' +
+      'it wants a token (--auth-token) the coordinator was not given.',
     refusedHint:
       'The endpoint refused the snapshot — /move is strict about the sequence and only answers ' +
       'when the body ends on the hero’s decision.',

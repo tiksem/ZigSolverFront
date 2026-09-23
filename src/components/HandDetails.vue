@@ -6,7 +6,7 @@
  */
 import { computed } from 'vue'
 import PlayingCard from './PlayingCard.vue'
-import { CORE_STATS, isRatioStat } from '../lib/handBody'
+import { CORE_STATS, isRatioStat } from '../lib/stats'
 import { persistentRef, oneOf, asBoolean } from '../lib/persist'
 import { t, tp, tv, tk } from '../lib/i18n'
 

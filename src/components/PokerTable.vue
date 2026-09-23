@@ -10,13 +10,16 @@
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import SeatPod from './SeatPod.vue'
 import PlayingCard from './PlayingCard.vue'
-import { tournamentFor } from '../lib/manualTournament'
 import { t, tv } from '../lib/i18n'
 
 const props = defineProps({
   hand: { type: Object, required: true },
-  /** The table these seats belong to — typed stats are kept per table. */
-  tableIndex: { type: Number, default: null },
+  /** Name -> the stats typed for that seat at this table (the coordinator's). */
+  typedStats: { type: Object, default: () => ({}) },
+  /** The tournament header typed for this table, field by field. */
+  typedTournament: { type: Object, default: () => ({}) },
+  /** Whether the stats and the header can be typed here — a table, not a record. */
+  editable: { type: Boolean, default: false },
 })
 /**
  * `edit-stats`: a seat whose four HUD stats should be opened for typing.
@@ -161,13 +164,11 @@ const tourney = computed(() => {
     })
 })
 
-/** What was typed for this table — the same lookup that put it in the body. */
-const typedHeader = computed(() =>
-  props.tableIndex !== null ? tournamentFor(props.tableIndex) || {} : {},
-)
+/** What was typed for this table — the same values the coordinator wrote into the body. */
+const typedHeader = computed(() => props.typedTournament || {})
 
-/** The header is the table's, so it is typeable wherever the table is known. */
-const canEditTourney = computed(() => props.tableIndex !== null)
+/** The header is the table's, so it is typeable wherever the stats are. */
+const canEditTourney = computed(() => props.editable)
 
 const boardSlots = computed(() => {
   const b = props.hand.board || []
@@ -243,8 +244,8 @@ const boardSlots = computed(() => {
             :seat="seat"
             :is-button="seat.name === hand.buttonName"
             :to-act="seat.toAct || (seat.isHero && hand.heroToAct)"
-            :table-index="tableIndex"
-            :editable="tableIndex !== null && !seat.isHero"
+            :typed-stats="typedStats[seat.name] || {}"
+            :editable="editable && !seat.isHero"
             @edit="emit('edit-stats', seat)"
           />
         </div>

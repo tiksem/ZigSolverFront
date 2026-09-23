@@ -9,31 +9,54 @@ npm run dev          # http://localhost:5173
 npm run build        # -> dist/
 ```
 
+It needs [ZigSolverCoordinator](../ZigSolverCoordinator) running — that is the
+one server this app talks to:
+
+```bash
+cd ../ZigSolverCoordinator && uv run zigsolver-coordinator    # ws://localhost:8765
+```
+
 `dist/` is a static bundle with **relative asset paths and hash routing**
 (`#/`, `#/table/0`, `#/check`), so it drops into any directory the Kotlin server
 serves without rewrite rules.
 
-## Two hosts
+## The coordinator, and the two hosts behind it
 
-The app talks to both ends itself:
+The app only draws. Everything between a table and an answer happens in
+**ZigSolverCoordinator**, a Python service beside this repo, and the app holds
+**one WebSocket** to it:
 
-| host | what it is for |
+| | what it is for |
 |---|---|
-| **bot host** | the Kotlin runner. One WebSocket per table, `mode=0`: it pushes the table snapshots and takes the commands. |
-| **ZigSolver API** | the solver. Every snapshot is POSTed to `/move`, and the answer is what you read. |
+| **coordinator** | the page's only connection. It pushes each table's state — the parsed snapshot, the answer, the ranges, the history — and takes what the operator does: a regime picked, a stat typed, a re-solve, a command. |
+| **bot host** | the Kotlin runner, now the coordinator's to talk to. One WebSocket per table, `mode=0`: it pushes the table snapshots and takes the commands. |
+| **ZigSolver API** | the solver, also the coordinator's. Every snapshot is POSTed to `/move`, and the answer is what you read. |
 
-Both are typed once on the root view and remembered. There is **no `mode=1`
-socket** — the front end is the one calling the solver, which is what lets the
-regime picker re-ask the same spot as a different question.
+The coordinator parses each snapshot, writes what was typed by hand into it,
+places it in its hand, draws the regime coins, runs the solve pipeline
+(coalescing, cancelling, shielding re-reads), keeps the history and **every
+setting** — so a second tab on the same table, or a second machine, joins the
+same session and draws the same felt and the same answer instead of opening a
+second socket and paying for every solve twice. There is still **no `mode=1`
+socket** — the coordinator is the one calling the solver, which is what lets
+the regime picker re-ask the same spot as a different question.
 
-The API must send CORS headers for a browser to accept its responses; the
-bundled `api/server.py` change does that (`--cors-origin` to pin it). The
-connect screen probes `GET /health` and says so plainly if it cannot.
+What stays in the browser is only what is about the browser: the coordinator's
+address (typed once on the root view; `hostname:8765` of the page by default,
+or `VITE_COORDINATOR` at build time), the theme, the language, and which pane
+of a sheet was open. The protocol is described in
+[lib/coordinator.js](src/lib/coordinator.js) and the coordinator's README.
+
+Since the API is called by the coordinator rather than by a browser, it needs
+no CORS headers any more. The connect screen still probes `GET /health` — the
+coordinator does it and reports — and says so plainly if it cannot.
 
 ## The three views
 
-**`#/` — Tables.** Two fields (bot host, ZigSolver API) and Connect. It opens
-`mode=0` on the hardcoded indexes table (`96782`) and reads the broadcast
+**`#/` — Tables.** The coordinator's address (with its status), then two
+fields (bot host, ZigSolver API) and Connect, which hands both to the
+coordinator. It opens `mode=0` on the hardcoded indexes table (`96782`) and
+reads the broadcast
 
 ```
 Indexes: 0,3,7
@@ -42,13 +65,13 @@ Indexes: 0,3,7
 into one card per running table, while `GET /health` confirms the solver.
 `allbot` / `autoenablebot` are here, and so is the link to the check view.
 
-**`#/table/:index` — one table.** The socket pushes snapshots; each one goes
-straight to `/move` and the answer lands in the panel. Tables of **2 to 10
-seats** are drawn (9-max is the client's largest ring).
+**`#/table/:index` — one table.** The bot host's socket pushes snapshots to
+the coordinator; each one goes to `/move` and the answer lands in the panel.
+Tables of **2 to 10 seats** are drawn (9-max is the client's largest ring).
 
-A frame carrying a `position=` line is parsed as a snapshot
-([handBody.js](src/lib/handBody.js), a port of ZigSolver's
-`api/handhistory.py`) and drawn as a felt: seats around an oval with the hero at
+A frame carrying a `position=` line is parsed as a snapshot (the coordinator's
+`hand_body.py`, a port of ZigSolver's `api/handhistory.py`) and drawn as a
+felt: seats around an oval with the hero at
 the bottom, each with position, stack behind, HUD stats (typeable — see below),
 the action it took **on
 the street being played**, and the chips it has in front this street. Blinds are
@@ -61,7 +84,8 @@ whether you left it open.
 
 **`#/check` — Screenshot check.** The same `POST /checkScreenshot` multipart
 `check.html` sent (image, `check2`, `crop`, `tableIndex`), except you can drop or
-paste the image and the response renders inline.
+paste the image and the response renders inline. The coordinator relays it to
+the bot host.
 
 ## The regime, and re-asking
 
@@ -84,8 +108,8 @@ picker to see the other one.
 
 **Exploit is heads-up postflop only.** Preflop, a flop dealt three or more ways,
 and a two-handed table are outside what the models were fitted on
-(`api/exploit_spot.py` is the list, and this app mirrors it in
-[regime.js](src/lib/regime.js)). Those answer GTO instead: the picker greys the
+(`api/exploit_spot.py` is the list, and the coordinator mirrors it in its
+`regime.py`). Those answer GTO instead: the picker greys the
 Exploit chip and says why, Manual skips the question rather than asking one with
 a single answer, and if it happens anyway the answer panel says
 *“Exploit was asked for and could not be answered here”* with the reason in the
@@ -177,14 +201,14 @@ anything on the regime bar goes back to it.
 
 Three details:
 
-* **Kept per table, in this browser**, up to the last 150 decisions each. A
-  write that hits the storage quota drops the oldest quarter across all tables
-  and tries again, rather than silently keeping nothing from then on.
+* **Kept per table by the coordinator**, up to the last 150 decisions each,
+  one file per table in its data directory — so every page and every machine
+  reads the same history, and a reload loses nothing.
 * **Re-solving the same body in the same regime replaces its row**; a
   different regime on the same body is a different question and gets its own.
-* **Hands are grouped by `handId` within one page load.** The handId count
-  restarts on a reload, so each load prefixes its own session id rather than
-  filing tonight's first hand under last night's.
+* **Hands are grouped by `handId` within one coordinator run.** The handId
+  count restarts with the process, so each run prefixes its own session id
+  rather than filing tonight's first hand under last night's.
 
 ## Typing the stats the HUD does not carry
 
@@ -212,9 +236,10 @@ Four details:
 * **An empty field is not a zero.** It is the HUD's own value where there is one
   — which the placeholder shows — and the population average where there is not.
   Only filled fields are written, so PFR can be left alone while ATS is typed.
-* **Kept per table**, under the name the body carries. Clients that anonymise
-  ("Player 3") reuse the same handful of names at every table, and a global map
-  would put one table's read on another table's stranger.
+* **Kept per table** by the coordinator, under the name the body carries.
+  Clients that anonymise ("Player 3") reuse the same handful of names at every
+  table, and a global map would put one table's read on another table's
+  stranger.
 * **It re-asks under a new `handId`.** The cached tree was solved on ranges bent
   by stats the body no longer carries, so typing one is a different question
   about the same hand rather than a cache hit on the old answer. The re-solve
@@ -260,10 +285,11 @@ anything less is chips.
 
 ## Cancelling superseded solves
 
-A new snapshot while one is still solving makes that answer worthless. Aborting
-the `fetch` only frees the browser — the endpoint would solve to completion and
-keep the solve semaphore, so the question you *do* want queues behind a dead
-one. So the app also calls **`POST /cancel`**, which SIGKILLs the solver
+A new snapshot while one is still solving makes that answer worthless.
+Abandoning the request only frees the coordinator's end of it — the endpoint
+would solve to completion and keep the solve semaphore, so the question you *do*
+want queues behind a dead one. So the coordinator also calls **`POST /cancel`**,
+which SIGKILLs the solver
 subprocess and frees the lock (see `api/cancel.py` and the `/cancel` section of
 the API README).
 
@@ -286,13 +312,14 @@ card twice, or lost the block that says whose turn it is, and the endpoint
 refused a body describing a table that cannot exist. The snapshot is evidence of
 *what was read* — only the pixels show what there was to read.
 
-So a failed call takes a picture. The app fetches **`GET /image/{tableIndex}`**
-from the bot host (the same host its socket is on; a PNG, optionally encrypted
-with the same key as the socket frames — `lib/crypto.js` sniffs it the same way,
-on PNG's signature rather than on "does this decode as text") and posts it to
-the API's **`POST /screenError`**, which files it under `screenerrors/` named
-for the hand and the moment, with the error, the refused body and the
-`requestId` beside it. See `lib/screenError.js` and the API README.
+So a failed call takes a picture. The coordinator fetches
+**`GET /image/{tableIndex}`** from the bot host (the same host its socket is on;
+a PNG, optionally encrypted with the same key as the socket frames — its
+`crypto.py` sniffs it the same way, on PNG's signature rather than on "does this
+decode as text") and posts it to the API's **`POST /screenError`**, which files
+it under `screenerrors/` named for the hand and the moment, with the error, the
+refused body and the `requestId` beside it. See the coordinator's
+`screen_error.py` and the API README.
 
 The image is forwarded **byte for byte, at full resolution** — no canvas, no
 re-encode, no resize. A rank read as the wrong rank is a handful of pixels, and
@@ -322,17 +349,25 @@ does at the endpoint:
 | Stat sample size | `statHands` — how much history the HUD stats cover |
 | Hold the sampled action | keep one draw while the same spot is re-solved (GTO only) |
 
-Endpoints are editable here too.
+Endpoints are editable here too: the coordinator's address, which is this
+browser's own setting, and the two hosts behind it, which are the
+coordinator's. Everything else on the sheet is kept by the coordinator, so it
+is the same on every page. The API token is kept there and never sent back to
+a page — the field says whether one is set, and **Forget** clears it.
 
 ## Mock hosts
 
-No bot and no solver needed to work on the UI:
+No bot and no solver needed to work on the UI — fake both hosts, and run the
+coordinator between them and the app:
 
 ```bash
-node mock/server.js 8080 8000
+node mock/server.js 8080 8000                                  # the two hosts, faked
+(cd ../ZigSolverCoordinator && uv run zigsolver-coordinator)   # ws://localhost:8765
+npm run dev
 ```
 
-Dependency-free (the WebSocket handshake and framing are done by hand). It
+Then connect to `localhost:8080` with the API on `localhost:8000`. The mock is
+dependency-free (the WebSocket handshake and framing are done by hand). It
 serves `Indexes: 0,1,3,5,7,9`; table **0** is a 3-way 6-max flop decision whose
 SB carries no HUD stats at all (the seat to try typing some into), table
 **1** a 6-max pot that is heads-up from the flop (the one shape the Exploit
@@ -371,7 +406,7 @@ that moves, villains acting to their own persona, streets, showdowns, stacks
 that carry over — pushing a fresh snapshot every time the hero is on the clock.
 
 ```bash
-cd ../ZigSolver && ./runapi.sh --port 8000 --cors-origin http://localhost:5173
+cd ../ZigSolver && ./runapi.sh --port 8000
 node fakebot/server.js 8080 --hero-delay 60000
 ```
 
@@ -381,8 +416,8 @@ the default 9s the hero acts first and you watch the supersede-and-cancel path
 instead.
 
 `--encrypt` puts every frame **and** the `/image/N` body through the same
-AES-256-CBC the Kotlin host uses, which is what proves the sniffing in
-`lib/crypto.js` against real ciphertext. To watch a capture happen end to end,
+AES-256-CBC the Kotlin host uses, which is what proves the sniffing in the
+coordinator's `crypto.py` against real ciphertext. To watch a capture happen end to end,
 lift the flop-width cap: the solver serves up to 5 players postflop and refuses
 anything wider, so a 6-way flop is a genuine 400 with a real screenshot behind
 it.
@@ -395,28 +430,24 @@ node fakebot/server.js 8080 --encrypt --max-flop-players 0 --speed 4
 
 ```
 src/
-  lib/        handBody.js   snapshot parser (port of api/handhistory.py)
-              zigsolver.js  /move + /cancel client, handId minting
-              moveResult.js answer normalizer + action sampling
-              ranges.js     the ranges a solve ran on: the chart, and the
-                            hand's streets of them as they arrive
-              history.js    every answer shown, per table, kept for review
-              settings.js   persisted solve settings
-              regime.js     gto|exploit|manual, and where exploit applies
-              manualStats.js the four HUD stats, typed by hand
-              manualTournament.js the tournament header, typed by hand
-              notify.js     transient notifications
+  lib/        coordinator.js the one socket: the state it pushes, the intents
+                            it takes, the tables a component subscribes to
+              native.js     the macOS shell's bridge, when there is one
+              regime.js     the regime picker's choices
+              preflop.js    the preflop picker's choices
+              stats.js      how HUD stats and the tournament header are laid out
+              answerFormat.js the colour per action kind, and the percent
+              ranges.js     the 13x13 chart and the combos the board leaves
               solvers.js    what each solver regime means
-              screenError.js the failed-call screen capture
-              server.js     the two hosts; socket and http URLs
-              useSocket.js  reconnecting WebSocket composable
+              notify.js     transient notifications
+              i18n.js · theme.js · persist.js
   components/ PokerTable · SeatPod · PlayingCard · SolverPanel
               RegimeBar · RegimePrompt · HandDetails · SettingsSheet
               SeatStatsSheet · TournamentSheet · InfoSheet · HelpButton
               RangesSheet · RangesView · RangeGrid · HistorySheet
               MessageDock · NotificationStack · AppNav · StatusDot
   views/      ConnectView · TableView · CheckView
-mock/         the two hosts as fixed snapshots
+mock/         the two hosts as fixed snapshots (for the coordinator to talk to)
 fakebot/      a bot host with a simulated game behind it (png.js draws the
               stand-in screenshot /image/N serves)
 legacy/       the original static pages, kept for reference
