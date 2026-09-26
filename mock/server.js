@@ -189,7 +189,11 @@ hand=A♦J♦
 stack=55.6BB
 `
 
-/** Table 3: heads-up preflop — the chart path, which has no GTO twin. */
+/**
+ * Table 3: heads-up preflop, short -- the chart path, which has no GTO twin,
+ * and under Exploit the all-in calculator's spot (17bb effective: a shove is
+ * the move to price, so the coordinator sends `exploit` here).
+ */
 const SNAPSHOT_HU = `Total pot 1.5BB
 
 Anna K
@@ -198,13 +202,13 @@ raise 3BB
 VPIP=49%
 PFR=31%
 3BET=14%
-stack=37.2BB
+stack=14.2BB
 
 *me*
 position=BB
 waiting
 hand=A♠K♦
-stack=52.8BB
+stack=21.8BB
 `
 
 /**
@@ -768,6 +772,106 @@ const answerFor = (req) => {
   }
 }
 
+/**
+ * The preflop all-in calculator's readout (api/preflop_allin.py), as the API
+ * attaches it to every short-stack preflop answer under `meta.allin`: every
+ * move priced against the opponents' measured jam and call ranges, in chips
+ * and -- with a tournament header -- in prize equity, the win probability, the
+ * fold-through, and the first-level responses of each opponent.
+ */
+const ALLIN_READOUT = {
+  actions: [
+    {
+      action: 'all-in',
+      evBB: 3.62,
+      evICM: 2.91,
+      pWin: 0.734,
+      pFoldThrough: 0.581,
+      pShowdown: 0.419,
+      showdownEquity: 0.612,
+      pHeroFaces: 0,
+      pHeroContinues: null,
+      responses: { 'Anna K': { fold: 0.581, call: 0.419 } },
+    },
+    {
+      action: 'call',
+      evBB: 2.14,
+      evICM: 1.77,
+      pWin: 0.598,
+      pFoldThrough: 0,
+      pShowdown: 0,
+      showdownEquity: null,
+      pHeroFaces: 0,
+      pHeroContinues: null,
+      responses: null,
+    },
+    { action: 'fold', evBB: 0, evICM: 0, pWin: 0, pFoldThrough: 0, pShowdown: 0,
+      showdownEquity: null, pHeroFaces: 0, pHeroContinues: null, responses: null },
+  ],
+  best: 'all-in',
+  metric: 'icm',
+  hero: { hand: 'AsKd', class: 'AKo', position: 'BB', totalBB: 22.8, toCallBB: 2 },
+  effectiveBB: 17.2,
+  stackOff: false,
+  facingAllIn: false,
+  committedCall: false,
+  reopened: true,
+  icm: { playersLeft: 41, playersPaid: 40, avgStackBB: 30, finalTable: false, chipEquivalent: false },
+  notes: [
+    'a flat call is priced as the realized-equity share of the pot with no postflop betting ' +
+      '(an estimate, not a solve)',
+    "an opponent's raise is priced as a jam except a 3bet over the hero's own open",
+  ],
+  nodes: 55,
+  modelCalls: 18,
+  runouts: 4912,
+  seconds: 0.161,
+}
+
+/**
+ * Table 3 under the Exploit regime: the all-in calculator IS the answer. An
+ * argmax like the postflop exploit answer -- probability 1 on the move -- with
+ * the EV in chips and prize equity and the win probability on every row; the
+ * chart's own distribution rides along as `meta.chartActions`.
+ */
+const ANSWER_PREFLOP_ALLIN = {
+  actions: ALLIN_READOUT.actions.map((r) => ({
+    action: r.action,
+    probability: r.action === ALLIN_READOUT.best ? 1 : 0,
+    evBB: r.evBB,
+    evICM: r.evICM,
+    pWin: r.pWin,
+    pFoldThrough: r.pFoldThrough,
+    showdownEquity: r.showdownEquity,
+  })),
+  regime: 'exploit',
+  regimeRequested: 'exploit',
+  solver: 'preflop-allin',
+  street: 'preflop',
+  hand: 'AsKd',
+  responseTime: 0.171,
+  meta: {
+    node: 'threebet',
+    seat: 'BB',
+    handClass: 'AKo',
+    potBB: 4.5,
+    toCallBB: 2,
+    effectiveBB: 17.2,
+    raisesBefore: 1,
+    callersBefore: 0,
+    aggressor: 'SB',
+    adjustments: { openWidth: '1.42x the SB baseline (ATS 49)' },
+    raiseWeightPct: 81.68,
+    allin: ALLIN_READOUT,
+    chartActions: [
+      { action: 'fold', probability: 0.0 },
+      { action: 'call', probability: 0.1832 },
+      { action: 'all-in', probability: 0.8168 },
+    ],
+    warnings: ALLIN_READOUT.notes,
+  },
+}
+
 const ANSWER_CHART = {
   actions: [
     { action: 'fold', probability: 0.0 },
@@ -792,6 +896,9 @@ const ANSWER_CHART = {
     aggressor: 'SB',
     adjustments: { openWidth: '1.42x the SB baseline (ATS 49)' },
     raiseWeightPct: 81.68,
+    // The calculator's readout beside the chart: attached whenever the
+    // effective stack is short enough for a shove to be the move to price.
+    allin: ALLIN_READOUT,
     warnings: [],
   },
 }
@@ -1102,7 +1209,12 @@ const apiServer = http.createServer((req, res) => {
             }),
           )
         }
-        const answer = /Board:/.test(body.body) ? answerFor(body) : ANSWER_CHART
+        // Preflop: the chart, or -- asked for Exploit -- the all-in calculator.
+        const answer = /Board:/.test(body.body)
+          ? answerFor(body)
+          : body.regime === 'exploit'
+            ? ANSWER_PREFLOP_ALLIN
+            : ANSWER_CHART
         console.log(`[api] <- 200 ${label}`)
         res
           .writeHead(200, { 'Content-Type': 'application/json' })

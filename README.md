@@ -94,10 +94,17 @@ snapshot. It is not in the settings sheet on purpose: everything in there is
 *how* a solve is requested and you set it once, while this is *what you are
 asking for*, and it changes hand to hand.
 
+**Each table keeps its own.** The regime — with the Advanced mix and its stats
+gate — and the preflop engine with its mix are kept by the coordinator per
+table index, so picking Exploit on one table leaves every other table playing
+what it was. A table nobody has picked on starts at GTO and the preflop
+algorithm, or, on a coordinator upgraded from when the pickers were shared, at
+the choice every table shared then.
+
 | | sent as | what comes back |
 |---|---|---|
 | **GTO** | `regime: "gto"` | The equilibrium strategy at the node — a distribution, mix at those frequencies. |
-| **Exploit** | `regime: "exploit"` | The maximum-EV action against this villain's measured behaviour. An expectimax over models fitted to real players, so there is no equilibrium in it and nothing to mix: one action, with the EV of every alternative next to it. |
+| **Exploit** | `regime: "exploit"` | The maximum-EV action against this villain's measured behaviour. An expectimax over models fitted to real players, so there is no equilibrium in it and nothing to mix: one action, with the EV of every alternative next to it. Preflop it is the **all-in calculator** (`solver: "preflop-allin"`): every move priced against the opponents' measured jam and call ranges, in chips and in prize equity. |
 | **Manual** | neither | Nothing is sent until you pick. Each decision the table pushes stops and asks, and that choice applies to that decision only. |
 
 **The two are never computed together.** An exploit answer is a different
@@ -106,14 +113,32 @@ GTO column beside it and no delta — pricing both would double the wall clock o
 every decision to illustrate a comparison you did not ask for. Switch the
 picker to see the other one.
 
-**Exploit is heads-up postflop only.** Preflop, a flop dealt three or more ways,
-and a two-handed table are outside what the models were fitted on
+**Postflop, Exploit is heads-up only.** A flop dealt three or more ways and a
+two-handed table are outside what the postflop models were fitted on
 (`api/exploit_spot.py` is the list, and the coordinator mirrors it in its
 `regime.py`). Those answer GTO instead: the picker greys the
 Exploit chip and says why, Manual skips the question rather than asking one with
 a single answer, and if it happens anyway the answer panel says
 *“Exploit was asked for and could not be answered here”* with the reason in the
-warnings. There is no ICM in it either — a bubble spot gets a cash-game answer.
+warnings. There is no ICM in the postflop calculator — a bubble spot gets a
+cash-game answer there.
+
+**Preflop, Exploit is the all-in calculator** (`api/preflop_allin.py`), and it
+applies where a shove is the move to price: the effective stack at 30BB or
+under, or a shove already in front of the hero. Every move — fold, call, the
+shove, a small open with its jam-or-fold continuation — is priced against each
+opponent's stage-calibrated fold / call / jam frequency and their measured
+all-in composition, with everyone still behind priced in and the leaves priced
+through the same ICM model the GTO path solves with. The answer is an argmax
+(`solver: "preflop-allin"`) whose rows carry **EV in BB**, **EV ICM** (prize
+equity, chip-equivalent BB; absent without a tournament) and **Win**, the chance
+the hero ends up with the pot. A deeper preflop spot is not a fallback: the
+picker keeps the Exploit chip active and the spot is played by the preflop
+algorithm, with the reason in the regime bar. Under GTO the same calculator
+rides along every short-stack preflop answer as a readout beneath the chart's
+frequencies (`meta.allin`), and where the hero faces an all-in or a call that
+would commit the stack it decides the chart's continue leg outright
+(`solver: "chart+allin"`, the chart's own rows kept as `meta.chartActions`).
 
 Picking a regime **re-solves the snapshot on screen**. A `handId` still rides
 along so a later street reuses the tree the earlier one built, but that is a GTO
@@ -126,8 +151,9 @@ The answer panel is deliberately small — a strip, not a page:
   GTO, and simply the top row under Exploit.
 * One row per action. Under GTO that is the **frequency**; under Exploit it is
   **EV in BB**, the same as **% of pot**, and the **support** the size models
-  have at that size. The decision category the engine gave the hero's hand rides
-  along each row where the solve provides one.
+  have at that size — or, for the preflop all-in calculator, **EV in BB**,
+  **EV ICM** and **Win**. The decision category the engine gave the hero's hand
+  rides along each row where the solve provides one.
 * The regime that actually ran as a chip, the solver regime as a badge with a
   **?** for what that rung does to the answer, and a **Details** button holding
   the rest: every `meta` field, the warnings and the raw response.

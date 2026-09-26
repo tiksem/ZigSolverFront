@@ -12,9 +12,12 @@
  * are closed, so the solve is drawn at the mix you just set rather than the one
  * you are about to change.
  *
+ * Both pickers and their Advanced knobs are THIS table's: the coordinator keeps
+ * them per table, so what is picked here leaves every other table's play alone.
+ *
  * Read / Bot / Pause keep their tokens and the "E" shortcut.
  */
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import HelpButton from './HelpButton.vue'
 import InfoSheet from './InfoSheet.vue'
 import AdvancedSheet from './AdvancedSheet.vue'
@@ -25,10 +28,14 @@ import { state, meta, selectPreflop } from '../lib/coordinator'
 import { t, tk } from '../lib/i18n'
 
 const props = defineProps({
+  /** The table this bar picks for. */
+  tableIndex: { type: Number, required: true },
   /** Socket state — the table commands need it; a re-solve does not. */
   disabled: { type: Boolean, default: false },
-  /** 'gto' | 'exploit' | 'manual' | 'advanced' */
-  selected: { type: String, default: 'gto' },
+  /** This table's regime: { selected: 'gto' | 'exploit' | 'manual' | 'advanced', exploitPct, requireStats }. */
+  regime: { type: Object, required: true },
+  /** This table's preflop engine: { selected: 'alg' | 'gto' | 'advanced', gtoPct }. */
+  preflop: { type: Object, required: true },
   /** The coordinator's verdict on this hand: can Exploit answer it? { status, ok, why }. */
   exploit: { type: Object, default: () => ({ status: 'pending', ok: false, why: null }) },
   /** The HUD stats read on this spot's villain — what Advanced's gate looks at. */
@@ -46,6 +53,19 @@ const helpFor = ref(null)
 const advanced = ref(false)
 const pfMix = ref(false)
 
+const selected = computed(() => props.regime.selected)
+
+// A different table is a different felt, and these knobs are the table's own:
+// a sheet opened for one must not end up setting another. Closed without the
+// re-solve closing it normally asks for — nothing was set on this table.
+watch(
+  () => props.tableIndex,
+  () => {
+    advanced.value = false
+    pfMix.value = false
+  },
+)
+
 /**
  * A preflop engine that needs the blueprint service, on a server that has
  * none. Shown but inert, exactly like an exploit regime on a hand that cannot
@@ -59,11 +79,11 @@ function pfInert(value) {
 
 function pickPreflop(value) {
   if (pfInert(value)) return
-  if (value === 'advanced' && state.preflop.selected === 'advanced') {
+  if (value === 'advanced' && props.preflop.selected === 'advanced') {
     pfMix.value = true
     return
   }
-  selectPreflop(value)
+  selectPreflop(props.tableIndex, value)
   if (value === 'advanced') pfMix.value = true
   else emit('resolve')
 }
@@ -81,10 +101,10 @@ const pfNote = computed(() => {
   if (!state.gtoAvailable) return t('preflopBar.noService')
   const d = props.preflopDrew
   if (d && d.forced) return t('preflopBar.forced', { reason: tk(d.forced) })
-  if (state.preflop.selected === 'advanced' && d) {
+  if (props.preflop.selected === 'advanced' && d) {
     return t('preflopBar.drew', { engine: t(`preflop.${d.engine}.short`) })
   }
-  return t(`preflop.${state.preflop.selected}.tagline`)
+  return t(`preflop.${props.preflop.selected}.tagline`)
 })
 
 /**
@@ -99,7 +119,7 @@ const inert = (value) =>
 
 /** Advanced's gate on this hand's villain — the coin is skipped under it. */
 const gated = computed(
-  () => state.regime.requireStats && props.statNames.length < meta.minStatsForExploit,
+  () => props.regime.requireStats && props.statNames.length < meta.minStatsForExploit,
 )
 
 /**
@@ -113,32 +133,37 @@ const gated = computed(
  */
 const PENDING = ['exploit', 'manual', 'advanced']
 
-const tagline = computed(() => t(`regime.${props.selected}.tagline`))
+const tagline = computed(() => t(`regime.${selected.value}.tagline`))
 
 /** The line under the picker: what the next solve will actually ask for. */
 const note = computed(() => {
   if (props.exploit.status === 'pending') {
-    return PENDING.includes(props.selected)
-      ? t(`regimeBar.pending.${props.selected}`)
+    // A preflop spot too deep for the all-in calculator says so under the
+    // Exploit chip: the preflop algorithm plays it, and this is why.
+    if (selected.value === 'exploit' && props.exploit.why) {
+      return t('regimeBar.exploitDeep', { why: tk(props.exploit.why) })
+    }
+    return PENDING.includes(selected.value)
+      ? t(`regimeBar.pending.${selected.value}`)
       : tagline.value
   }
 
   const why = tk(props.exploit.why)
 
-  if (props.selected === 'manual') {
+  if (selected.value === 'manual') {
     return props.exploit.ok
       ? t('regimeBar.manualAsks')
       : t('regimeBar.manualSkipped', { why })
   }
-  if (props.selected === 'exploit' && !props.exploit.ok) {
+  if (selected.value === 'exploit' && !props.exploit.ok) {
     return t('regimeBar.exploitRefused', { why })
   }
-  if (props.selected === 'advanced') {
+  if (selected.value === 'advanced') {
     if (!props.exploit.ok) return t('regimeBar.advancedRefused', { why })
     if (gated.value) {
       return t('regimeBar.advancedRefused', { why: tk(thinReadReason(props.statNames.length)) })
     }
-    const pct = state.regime.exploitPct
+    const pct = props.regime.exploitPct
     // The ends are legal settings and are how the mode is parked; reporting
     // them as a mix would be describing a coin that has only one side.
     if (pct === 0) return t('regimeBar.parkedGto')
@@ -156,9 +181,9 @@ const note = computed(() => {
 /** Orange is for a hand that is not being played the way the chip says. */
 const degraded = computed(
   () =>
-    props.selected !== 'gto' &&
+    selected.value !== 'gto' &&
     (props.exploit.status === 'no' ||
-      (props.selected === 'advanced' && props.exploit.ok && gated.value)),
+      (selected.value === 'advanced' && props.exploit.ok && gated.value)),
 )
 
 /**
@@ -209,7 +234,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <button class="rbtn" :title="t(`regime.${r.value}.tagline`)" @click="pick(r.value)">
             {{ t(`regime.${r.value}.short`) }}
             <span v-if="r.value === 'advanced'" class="mix mono">
-              {{ state.regime.exploitPct }}%
+              {{ regime.exploitPct }}%
             </span>
           </button>
           <HelpButton
@@ -236,7 +261,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           v-for="e in PREFLOP_ENGINES"
           :key="e.value"
           class="rwrap"
-          :class="{ on: state.preflop.selected === e.value, inert: pfInert(e.value) }"
+          :class="{ on: preflop.selected === e.value, inert: pfInert(e.value) }"
         >
           <button
             class="rbtn"
@@ -245,7 +270,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           >
             {{ t(`preflop.${e.value}.short`) }}
             <span v-if="e.value === 'advanced'" class="mix mono">
-              {{ state.preflop.gtoPct }}%
+              {{ preflop.gtoPct }}%
             </span>
           </button>
           <HelpButton
@@ -306,12 +331,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
     <AdvancedSheet
       v-if="advanced"
+      :table-index="tableIndex"
+      :regime="regime"
       :exploit="exploit"
       :stat-names="statNames"
       @close="closeAdvanced"
     />
 
-    <PreflopMixSheet v-if="pfMix" @close="closePfMix" />
+    <PreflopMixSheet
+      v-if="pfMix"
+      :table-index="tableIndex"
+      :preflop="preflop"
+      @close="closePfMix"
+    />
 
     <InfoSheet
       v-if="helpFor"

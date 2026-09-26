@@ -88,6 +88,9 @@ export function whyNoRanges(result) {
   if (result?.type !== 'answer') return null
   const players = result.meta?.ranges?.players
   if (Array.isArray(players) && players.length) return null
+  if (result.solver === 'preflop-allin' || result.solver === 'chart+allin') {
+    return 'ranges.noneAllin'
+  }
   if (result.regime === 'exploit') return 'ranges.noneExploit'
   if (result.street === 'preflop') return 'ranges.nonePreflop'
   return 'ranges.noneOther'

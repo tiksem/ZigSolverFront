@@ -18,6 +18,10 @@ import { t, te, tv } from './i18n'
  */
 export const SOLVER_TONES = {
   chart: { tone: 'neutral', quality: 'chart' },
+  // Preflop, short stacks: the exploit regime's all-in calculator, and the
+  // chart with its stack-off decided by the same calculator.
+  'preflop-allin': { tone: 'ok', quality: 'exploit' },
+  'chart+allin': { tone: 'ok', quality: 'chart' },
   exact: { tone: 'good', quality: 'exact' },
   exploit: { tone: 'ok', quality: 'exploit' },
   net: { tone: 'ok', quality: 'net' },

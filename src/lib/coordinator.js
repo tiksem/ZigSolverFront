@@ -123,8 +123,6 @@ export const state = reactive({
   health: null,
   /** Only what the regime bar's chip shows, until the real ones arrive. */
   settings: { maxSolveTime: 15, autoSolve: true, useHandCache: true },
-  regime: { selected: 'gto', exploitPct: 50, requireStats: true },
-  preflop: { selected: 'alg', gtoPct: 50 },
   gtoAvailable: false,
   /** `/health.solveTuning` — the API's own defaults for the flop knobs. */
   solveTuning: null,
@@ -146,6 +144,9 @@ function emptyTable(index) {
      *  coordinator's `solveElapsed`, since its clock is not this machine's. */
     startedAt: null,
     pending: null,
+    /** What this table's bar has picked — each table keeps its own. */
+    regime: { selected: 'gto', exploitPct: 50, requireStats: true },
+    preflop: { selected: 'alg', gtoPct: 50 },
     exploit: { status: 'pending', ok: false, why: null },
     villainStats: [],
     drew: null,
@@ -418,12 +419,15 @@ export const clearActivity = () => send('lobby.clearActivity')
 export const setSetting = (key, value) => send('settings.set', { key, value })
 export const resetSettings = () => send('settings.reset')
 
-/** Picked on a table's bar: the coordinator re-asks THAT table's hand. */
-export const selectRegime = (value, index) => send('regime.select', { value, index })
-export const setExploitPct = (value) => send('regime.setExploitPct', { value })
-export const setRequireStats = (on) => send('regime.setRequireStats', { on })
-export const selectPreflop = (value) => send('preflop.select', { value })
-export const setGtoPct = (value) => send('preflop.setGtoPct', { value })
+/**
+ * A table's bar, for that table alone: the regime and the preflop engine are
+ * kept per table. Picking a regime also re-asks the table's hand.
+ */
+export const selectRegime = (index, value) => send('regime.select', { index, value })
+export const setExploitPct = (index, value) => send('regime.setExploitPct', { index, value })
+export const setRequireStats = (index, on) => send('regime.setRequireStats', { index, on })
+export const selectPreflop = (index, value) => send('preflop.select', { index, value })
+export const setGtoPct = (index, value) => send('preflop.setGtoPct', { index, value })
 
 export const solveTable = (index) => send('table.solve', { index })
 /** Manual mode's answer for this hand. */

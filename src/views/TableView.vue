@@ -178,7 +178,7 @@ function backToLive() {
 
 function onSelectRegime(value) {
   backToLive()
-  selectRegime(value, props.index)
+  selectRegime(props.index, value)
 }
 
 function resolve() {
@@ -386,8 +386,10 @@ watch(
 
       <aside class="side">
         <RegimeBar
+          :table-index="index"
           :disabled="socketStatus !== 'open'"
-          :selected="state.regime.selected"
+          :regime="table.regime"
+          :preflop="table.preflop"
           :exploit="table.exploit"
           :stat-names="table.villainStats"
           :drew="table.drew"
@@ -411,7 +413,7 @@ watch(
           :result="shownResult"
           :pending="!reviewing && solving"
           :started-at="reviewing ? null : table.startedAt"
-          :regime="state.regime.selected"
+          :regime="table.regime.selected"
           :ranges="shownRanges"
         />
       </aside>

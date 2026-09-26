@@ -240,7 +240,9 @@ export default {
       '<b>Support</b> is how much real play the size models saw at that size; a winning ' +
       'branch with thin support is one the models are extrapolating on, and the warnings say so.',
     pending: {
-      exploit: 'Play exploit when available.',
+      exploit:
+        'Play exploit when available: preflop it prices short-stack and all-in spots, the ' +
+        'rest from the flop.',
       manual:
         'You are asked on the flop, once for the whole hand. Preflop is not asked about.',
       advanced:
@@ -249,6 +251,7 @@ export default {
     manualAsks: 'This hand stops and asks once, before anything is sent.',
     manualSkipped: 'Answered GTO without asking: {why}.',
     exploitRefused: 'This hand is GTO instead: {why}.',
+    exploitDeep: 'This preflop spot is the preflop algorithm’s: {why}.',
     advancedRefused: 'This hand is GTO: {why}.',
     parkedGto: 'Every hand is GTO — the mix is parked at no Exploit.',
     parkedExploit: 'Every hand is Exploit — the mix is parked at no GTO.',
@@ -261,6 +264,8 @@ export default {
     headsUpTable: 'a two-handed table is outside the models’ training data',
     multiwayFlop: 'the flop was {count}-way and the models are heads-up postflop',
     noPreflopService: 'this API has no blueprint service configured',
+    deepPreflop:
+      'the effective stack is {count}BB, deeper than the all-in calculator prices preflop',
     noStats: 'the HUD carries no stats on the villain',
     fewStats: {
       one: 'the HUD carries only {count} stat on the villain',
@@ -293,11 +298,14 @@ export default {
         'it. It is also maximally exploitable back, and only as good as the read: with no HUD ' +
         'stats on the villain the models describe the average player, not this one.',
       limits:
-        'From the flop on. Preflop is played by the preflop algorithm whatever is selected here — ' +
-        'that is not a fallback, it is a spot this question was never about. Of the hands that do ' +
-        'see a flop, one dealt three or more ways and one at a two-handed table are outside what ' +
-        'the models were fitted on, and those are answered GTO for the whole hand — the panel says ' +
-        'so when it happens. There is no ICM in it either: a bubble spot gets a cash-game answer.',
+        'Preflop it is the all-in calculator, where the effective stack is 30BB or under or a ' +
+        'shove is already in front of the hero — every move priced against these opponents’ ' +
+        'measured jam and call ranges, in chips and in prize equity. A deeper preflop spot is ' +
+        'played by the preflop algorithm: not a fallback, a spot this question was never about. ' +
+        'Of the hands that do see a flop, one dealt three or more ways and one at a two-handed ' +
+        'table are outside what the postflop models were fitted on, and those are answered GTO ' +
+        'for the whole hand — the panel says so when it happens. Postflop there is no ICM in it: ' +
+        'a bubble spot gets a cash-game answer there.',
     },
     manual: {
       short: 'Manual',
@@ -383,6 +391,26 @@ export default {
     colPctPot: '% pot',
     colSupport: 'Support',
     colFrequency: 'Frequency',
+    colEvIcm: 'EV ICM',
+    colWin: 'Win',
+    blurbPreflopAllin:
+      'Every move priced against these opponents’ measured jam and call ranges — in chips and, ' +
+      'in a tournament, in prize equity. The top row is the move.',
+    blurbChartAllin:
+      'The chart, with the stack-off decided on equity against this opponent’s measured range, ' +
+      'everyone behind, and the prize ladder.',
+    allinHeading: 'All-in calculator',
+    allinLine:
+      'Best <b>{action}</b>: EV {ev} BB{icm} · wins the pot {win}% · folds through {fold}%',
+    allinIcmPart: ', {icm} BB in prize equity',
+    allinMetricChips: 'decided on chip EV',
+    allinMetricIcm: 'decided on prize equity (ICM)',
+    allinShow: 'Show rows',
+    allinHide: 'Hide rows',
+    numbersAllin:
+      '<b>EV ICM</b> is the same expectation in tournament prize equity, in chip-equivalent BB ' +
+      'against this decision’s fold; without a tournament it equals EV (BB). <b>Win</b> is how ' +
+      'often the hero ends up with the pot — everyone folding, or winning the showdown.',
     blurbExploit:
       'Maximum EV against this villain’s measured behaviour. The top row is the move — there is ' +
       'nothing to mix at, and every EV is counted from this decision on.',
@@ -469,11 +497,23 @@ export default {
     node: 'Node',
     budgetSent: 'Budget sent',
     handId: 'handId',
+    allinMetric: 'All-in metric',
+    allinStackOff: 'Stack-off',
+    allinDecides: 'Calculator decides',
+    allinReopened: 'Betting reopened',
+    allinRunouts: 'Runouts sampled',
+    allinNodes: 'All-in nodes',
+    allinModelCalls: 'All-in model calls',
+    allinSeconds: 'All-in calc time',
   },
 
   /** The ranges sheet: what the solve was actually run against. */
   ranges: {
     open: 'Ranges',
+    noneAllin:
+      'No ranges: the all-in calculator prices the hero’s hand against each opponent’s ' +
+      'measured jam and call composition, scaled to their own frequency, and those are not ' +
+      'returned as charts.',
     title: 'Ranges the solve ran on',
     subtitle: 'From {source}',
     heading: 'Ranges',
@@ -840,6 +880,46 @@ export default {
 
   // --- what the `solver` field of an answer means ------------------------
   solver: {
+    'preflop-allin': {
+      title: 'Preflop all-in calculator',
+      summary:
+        'Preflop, short stacks: every move priced in chips and prize equity against these opponents.',
+      detail:
+        'The Exploit regime’s preflop answer. Not a chart and not a solve: an expectimax over ' +
+        'what THESE opponents do. Each of them gets a fold / call / jam probability from the ' +
+        'fitted preflop action model — their HUD stats, the exact spot (stacks, pot, raises, ' +
+        'callers, players behind, antes) and the tournament stage, where the bubble, the money ' +
+        'and the final table move the fold rates — and the measured all-in compositions say ' +
+        'which hands they do it with: a player all-in before the flop shows their cards ' +
+        'whatever they hold, so those reveals ARE the ranges. The hero’s hand is priced against ' +
+        'them with exact card removal heads-up and sampled runouts three-way, and every leaf ' +
+        'goes through the same ICM model the GTO path solves with, so a tournament answer is ' +
+        'prize equity (EV ICM) and a cash answer is chips. A small open carries the 3bet-or-fold ' +
+        'continuation it commits to: facing a jam the hero calls or folds, facing a small 3bet ' +
+        'jams or folds, whichever is worth more. The top row is the move.\n\n' +
+        'It applies where a shove is the move to price — the effective stack at 30BB or under, ' +
+        'or a shove already in front of the hero; deeper preflop spots keep the chart. What it ' +
+        'abstracts, it says in the warnings: at most two opponents reach a showdown, an ' +
+        'opponent’s raise over a shove is priced as a call, and a flat call is priced as a ' +
+        'realized-equity share of the pot rather than a played-out street.',
+    },
+    'chart+allin': {
+      title: 'Chart + all-in calculator',
+      summary: 'The preflop chart, with its all-in decisions made by the all-in calculator.',
+      detail:
+        'A GTO-regime preflop answer where the hero’s chips go all in: the hero faces an ' +
+        'all-in, calling would leave no more than a pot behind (a stack-off in disguise), or ' +
+        'the hero’s re-raise is itself a shove (a 3bet, 4bet or squeeze jam). The chart has ' +
+        'nothing to price such a decision with (it ramps a playability ordering, and a ' +
+        'stack-off runs out), so the all-in calculator decides it: the hero’s equity against ' +
+        'what these opponents actually shove or call with, everyone still behind, and the ' +
+        'prize ladder. Facing an all-in or a committed call it decides the whole continue ' +
+        'leg; for a re-raise shove it decides jam against fold, and the chart’s flat call ' +
+        'stays as it was. The verdict is served as a frequency — pure beyond a small EV band, ' +
+        'a linear mix inside it — and the chart’s own rows stay in the details as ' +
+        'chartActions. A re-raise appears only where the betting is reopened for the hero: ' +
+        'an incomplete all-in does not reopen it.',
+    },
     chart: {
       title: 'Preflop chart',
       summary: 'No solver ran — the preflop answer is a chart.',

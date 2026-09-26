@@ -15,7 +15,7 @@ import InfoSheet from './InfoSheet.vue'
 import RangesSheet from './RangesSheet.vue'
 import { describeSolver, describeFlow, decisionLabel } from '../lib/solvers'
 import { REGIME_BY_VALUE } from '../lib/regime'
-import { ACTION_TONE, pct } from '../lib/answerFormat'
+import { ACTION_TONE, actionKind, pct } from '../lib/answerFormat'
 import { whyNoRanges } from '../lib/ranges'
 import { t, tp, tv, tk } from '../lib/i18n'
 
@@ -114,6 +114,18 @@ const served = computed(() => {
 const isExploit = computed(() => answer.value?.regime === 'exploit')
 
 /**
+ * The preflop all-in calculator ran — as the answer (`preflop-allin`, the
+ * Exploit regime's preflop) or as the chart's all-in verdict (`chart+allin`,
+ * the GTO regime facing a shove, a committed call, or a re-raise that is a
+ * shove). Its rows carry an EV in chips and, in a tournament, in prize equity,
+ * and the win probability. On a re-raise shove the chart's flat keeps its own
+ * frequency and carries no EV.
+ */
+const isAllin = computed(
+  () => answer.value?.solver === 'preflop-allin' || answer.value?.solver === 'chart+allin',
+)
+
+/**
  * The endpoint declined the question and answered the other one — preflop, a
  * multiway pot, a two-handed table, or a box without the models. The reason is
  * in the warnings; this is the sentence that sends you there.
@@ -150,8 +162,50 @@ const rows = computed(() => {
     evBB: x.evBB,
     evPot: x.evPot,
     support: x.support,
+    // The all-in calculator's columns: prize equity (null without a
+    // tournament) and how often the hero ends up with the pot.
+    evICM: x.evICM,
+    pWin: x.pWin,
     decision: meta.value.handDecisions?.[x.action] || null,
   }))
+})
+
+/** Which of the all-in calculator's columns the rows on screen carry. */
+const hasEv = computed(() => rows.value.some((r) => r.evBB != null))
+const hasIcm = computed(() => rows.value.some((r) => r.evICM != null))
+
+/**
+ * The all-in calculator's readout beside a PLAIN chart answer — the GTO regime
+ * on a short-stack spot that is not a stack-off: every move priced against
+ * the opponents' measured jam and call ranges, next to the chart's own
+ * frequencies. Where the calculator IS the answer its numbers are already in
+ * the table above and this stays empty.
+ */
+const allin = computed(() => {
+  const a = meta.value.allin
+  if (!a || isAllin.value || !Array.isArray(a.actions) || !a.actions.length) return null
+  const bestRow = a.actions.find((r) => r.action === a.best) || a.actions[0]
+  return {
+    ...a,
+    bestRow,
+    rows: a.actions.map((r) => ({
+      ...r,
+      color: ACTION_TONE[actionKind(r.action)] || ACTION_TONE.other,
+    })),
+  }
+})
+const allinRows = ref(false)
+const allinLine = computed(() => {
+  const a = allin.value
+  if (!a) return ''
+  const b = a.bestRow
+  return t('panel.allinLine', {
+    action: b.action,
+    ev: num(b.evBB, 2),
+    icm: b.evICM == null ? '' : t('panel.allinIcmPart', { icm: num(b.evICM, 2) }),
+    win: b.pWin == null ? '–' : (b.pWin * 100).toFixed(0),
+    fold: b.pFoldThrough == null ? '–' : (b.pFoldThrough * 100).toFixed(0),
+  })
 })
 
 /**
@@ -253,6 +307,24 @@ const facts = computed(() => {
     props.result?.request?.maxSolveTime ? `${props.result.request.maxSolveTime} s` : null,
   )
   push('handId', props.result?.request?.handId)
+  // The preflop all-in calculator, whenever it ran on this decision.
+  const al = m.allin
+  if (al) {
+    push('allinMetric', al.metric)
+    push(
+      'allinStackOff',
+      al.stackOff ? (al.facingAllIn ? 'facing an all-in' : 'a call would commit the stack') : 'no',
+    )
+    // What the calculator decided in a GTO answer (`chart+allin`): facing an
+    // all-in, a committed call, or a re-raise that is a shove. Absent on a
+    // readout the chart kept, and on the Exploit regime (it IS the answer).
+    push('allinDecides', al.decides)
+    push('allinReopened', al.reopened == null ? null : String(al.reopened))
+    push('allinRunouts', al.runouts != null ? Number(al.runouts).toLocaleString() : null)
+    push('allinNodes', al.nodes != null ? Number(al.nodes).toLocaleString() : null)
+    push('allinModelCalls', al.modelCalls)
+    push('allinSeconds', al.seconds != null ? `${num(al.seconds, 3)} s` : null)
+  }
   return out
 })
 
@@ -347,12 +419,25 @@ const errorHint = computed(() => say(props.result?.hint))
         <thead>
           <tr>
             <th class="a">{{ t('panel.colAction') }}</th>
-            <template v-if="isExploit">
+            <!-- The all-in calculator as the answer: chips, prize equity, the
+                 win probability. Ranked by the metric that decided it. -->
+            <template v-if="isExploit && isAllin">
+              <th class="n">{{ t('panel.colEv') }}</th>
+              <th v-if="hasIcm" class="n">{{ t('panel.colEvIcm') }}</th>
+              <th class="n d">{{ t('panel.colWin') }}</th>
+            </template>
+            <template v-else-if="isExploit">
               <th class="n">{{ t('panel.colEv') }}</th>
               <th class="n">{{ t('panel.colPctPot') }}</th>
               <th class="n d">{{ t('panel.colSupport') }}</th>
             </template>
-            <th v-else class="n">{{ t('panel.colFrequency') }}</th>
+            <!-- The chart with its stack-off decided by the calculator: the
+                 frequency to play at, and the EV that decided it. -->
+            <template v-else>
+              <th class="n">{{ t('panel.colFrequency') }}</th>
+              <th v-if="isAllin && hasEv" class="n">{{ t('panel.colEv') }}</th>
+              <th v-if="isAllin && hasIcm" class="n">{{ t('panel.colEvIcm') }}</th>
+            </template>
           </tr>
         </thead>
         <tbody>
@@ -366,7 +451,12 @@ const errorHint = computed(() => say(props.result?.hint))
               <span class="akey">{{ r.action }}</span>
               <span v-if="r.decision" class="dec">{{ decisionLabel(r.decision) }}</span>
             </td>
-            <template v-if="isExploit">
+            <template v-if="isExploit && isAllin">
+              <td class="n tnum strong">{{ num(r.evBB, 2) }}</td>
+              <td v-if="hasIcm" class="n tnum muted">{{ num(r.evICM, 2) }}</td>
+              <td class="n d tnum">{{ r.pWin == null ? '' : `${(r.pWin * 100).toFixed(0)}%` }}</td>
+            </template>
+            <template v-else-if="isExploit">
               <td class="n tnum strong">{{ num(r.evBB, 2) }}</td>
               <td class="n tnum muted">
                 {{ r.evPot == null ? '' : `${(r.evPot * 100).toFixed(0)}%` }}
@@ -375,21 +465,65 @@ const errorHint = computed(() => say(props.result?.hint))
                 {{ r.support == null ? '' : `${(r.support * 100).toFixed(1)}%` }}
               </td>
             </template>
-            <td v-else class="n tnum strong">{{ pct(r.probability) }}</td>
+            <template v-else>
+              <td class="n tnum strong">{{ pct(r.probability) }}</td>
+              <td v-if="isAllin && hasEv" class="n tnum muted">{{ num(r.evBB, 2) }}</td>
+              <td v-if="isAllin && hasIcm" class="n tnum muted">{{ num(r.evICM, 2) }}</td>
+            </template>
           </tr>
         </tbody>
       </table>
+
+      <!-- the all-in calculator's readout beside a plain chart --------------- -->
+      <div v-if="allin" class="allin">
+        <div class="alhead">
+          <strong>{{ t('panel.allinHeading') }}</strong>
+          <span class="almetric">
+            {{ allin.metric === 'icm' ? t('panel.allinMetricIcm') : t('panel.allinMetricChips') }}
+          </span>
+          <button class="linky" @click="allinRows = !allinRows">
+            {{ allinRows ? t('panel.allinHide') : t('panel.allinShow') }}
+          </button>
+        </div>
+        <!-- v-html: the <b> is the message file's own. -->
+        <p class="alline" v-html="allinLine" />
+        <table v-if="allinRows" class="freq altable">
+          <thead>
+            <tr>
+              <th class="a">{{ t('panel.colAction') }}</th>
+              <th class="n">{{ t('panel.colEv') }}</th>
+              <th v-if="allin.metric === 'icm'" class="n">{{ t('panel.colEvIcm') }}</th>
+              <th class="n d">{{ t('panel.colWin') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in allin.rows" :key="r.action" :class="{ top: r.action === allin.best }">
+              <td class="a">
+                <span class="swatch" :style="{ background: r.color }" />
+                <span class="akey">{{ r.action }}</span>
+              </td>
+              <td class="n tnum strong">{{ num(r.evBB, 2) }}</td>
+              <td v-if="allin.metric === 'icm'" class="n tnum muted">{{ num(r.evICM, 2) }}</td>
+              <td class="n d tnum">{{ r.pWin == null ? '' : `${(r.pWin * 100).toFixed(0)}%` }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- the regime, in one line ----------------------------------------- -->
       <div class="readline">
         <strong>{{ served }}</strong>
         <span class="blurb">
           {{
-            isExploit
-              ? t('panel.blurbExploit')
-              : result.street === 'preflop'
-                ? t('panel.blurbPreflop')
-                : t('panel.blurbGto')
+            isAllin
+              ? isExploit
+                ? t('panel.blurbPreflopAllin')
+                : t('panel.blurbChartAllin')
+              : isExploit
+                ? t('panel.blurbExploit')
+                : result.street === 'preflop'
+                  ? t('panel.blurbPreflop')
+                  : t('panel.blurbGto')
           }}
         </span>
       </div>
@@ -442,6 +576,7 @@ const errorHint = computed(() => say(props.result?.hint))
       <!-- v-html: the <b> markup belongs to the message files. -->
       <p class="para" v-html="t('panel.numbersMix')" />
       <p class="para" v-html="t('panel.numbersEv')" />
+      <p v-if="isAllin || allin" class="para" v-html="t('panel.numbersAllin')" />
     </InfoSheet>
 
     <InfoSheet
@@ -752,6 +887,45 @@ tr.top td {
 
 td.n.thin {
   color: color-mix(in srgb, var(--orange) 86%, var(--label));
+}
+
+/* --- the all-in calculator's readout ------------------------------- */
+
+.allin {
+  margin-top: 10px;
+  padding: 8px 10px 6px;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--allin) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--allin) 28%, transparent);
+  font-size: 12.5px;
+}
+
+.alhead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.alhead strong {
+  font-weight: 660;
+  white-space: nowrap;
+}
+
+.almetric {
+  flex: 1;
+  min-width: 0;
+  color: var(--label-2);
+  font-size: 11.5px;
+}
+
+.alline {
+  margin: 4px 0 2px;
+  color: var(--label-2);
+  line-height: 1.45;
+}
+
+.altable {
+  margin-top: 6px;
 }
 
 /* --- read line ------------------------------------------------------ */

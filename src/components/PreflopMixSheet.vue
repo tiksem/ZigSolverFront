@@ -17,6 +17,12 @@ import InfoSheet from './InfoSheet.vue'
 import { state, setGtoPct } from '../lib/coordinator'
 import { t } from '../lib/i18n'
 
+defineProps({
+  /** The table whose knob this is — each table keeps its own. */
+  tableIndex: { type: Number, required: true },
+  /** That table's preflop engine: { selected, gtoPct }. */
+  preflop: { type: Object, required: true },
+})
 const emit = defineEmits(['close'])
 
 const PRESETS = [0, 25, 50, 75, 100]
@@ -38,10 +44,10 @@ const PRESETS = [0, 25, 50, 75, 100]
         <div class="mix">
           <div class="scale">
             <span class="end alg">
-              {{ t('preflop.alg.title') }} <b class="mono">{{ 100 - state.preflop.gtoPct }}%</b>
+              {{ t('preflop.alg.title') }} <b class="mono">{{ 100 - preflop.gtoPct }}%</b>
             </span>
             <span class="end gto">
-              <b class="mono">{{ state.preflop.gtoPct }}%</b> {{ t('preflop.gto.title') }}
+              <b class="mono">{{ preflop.gtoPct }}%</b> {{ t('preflop.gto.title') }}
             </span>
           </div>
           <input
@@ -51,16 +57,16 @@ const PRESETS = [0, 25, 50, 75, 100]
             max="100"
             step="5"
             :aria-label="t('preflopMix.sliderLabel')"
-            :value="state.preflop.gtoPct"
-            @input="setGtoPct($event.target.value)"
+            :value="preflop.gtoPct"
+            @input="setGtoPct(tableIndex, $event.target.value)"
           />
           <div class="presets">
             <button
               v-for="p in PRESETS"
               :key="p"
               class="preset"
-              :class="{ on: state.preflop.gtoPct === p }"
-              @click="setGtoPct(p)"
+              :class="{ on: preflop.gtoPct === p }"
+              @click="setGtoPct(tableIndex, p)"
             >
               {{ p }}%
             </button>

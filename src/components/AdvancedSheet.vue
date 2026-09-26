@@ -13,10 +13,14 @@
  */
 import { computed } from 'vue'
 import InfoSheet from './InfoSheet.vue'
-import { state, meta, setExploitPct, setRequireStats } from '../lib/coordinator'
+import { meta, setExploitPct, setRequireStats } from '../lib/coordinator'
 import { t, tp, tk } from '../lib/i18n'
 
 const props = defineProps({
+  /** The table whose knobs these are — each table keeps its own. */
+  tableIndex: { type: Number, required: true },
+  /** That table's regime: { selected, exploitPct, requireStats }. */
+  regime: { type: Object, required: true },
   /** The coordinator's verdict on this hand: can Exploit answer it? { status, ok, why }. */
   exploit: { type: Object, default: () => ({ status: 'pending', ok: false, why: null }) },
   /** The HUD stats read on this hand's villain, so the gate says what it is gating. */
@@ -26,7 +30,7 @@ const emit = defineEmits(['close'])
 
 const PRESETS = [0, 25, 50, 75, 100]
 
-const gtoPct = computed(() => 100 - state.regime.exploitPct)
+const gtoPct = computed(() => 100 - props.regime.exploitPct)
 
 /** What the gate does to the hand on screen, in one line. */
 const gateNote = computed(() => {
@@ -47,7 +51,7 @@ const gateNote = computed(() => {
 /** Warn only where the gate is actually costing this hand its draw. */
 const gateWarn = computed(
   () =>
-    state.regime.requireStats &&
+    props.regime.requireStats &&
     (props.exploit.status === 'no' ||
       (props.exploit.ok && props.statNames.length < meta.minStatsForExploit)),
 )
@@ -72,7 +76,7 @@ const gateWarn = computed(
               {{ t('regime.gto.title') }} <b class="mono">{{ gtoPct }}%</b>
             </span>
             <span class="end exp">
-              <b class="mono">{{ state.regime.exploitPct }}%</b> {{ t('regime.exploit.title') }}
+              <b class="mono">{{ regime.exploitPct }}%</b> {{ t('regime.exploit.title') }}
             </span>
           </div>
           <input
@@ -82,16 +86,16 @@ const gateWarn = computed(
             max="100"
             step="5"
             :aria-label="t('advanced.sliderLabel')"
-            :value="state.regime.exploitPct"
-            @input="setExploitPct($event.target.value)"
+            :value="regime.exploitPct"
+            @input="setExploitPct(tableIndex, $event.target.value)"
           />
           <div class="presets">
             <button
               v-for="p in PRESETS"
               :key="p"
               class="preset"
-              :class="{ on: state.regime.exploitPct === p }"
-              @click="setExploitPct(p)"
+              :class="{ on: regime.exploitPct === p }"
+              @click="setExploitPct(tableIndex, p)"
             >
               {{ p }}%
             </button>
@@ -107,8 +111,8 @@ const gateWarn = computed(
         <input
           class="switch"
           type="checkbox"
-          :checked="state.regime.requireStats"
-          @change="setRequireStats($event.target.checked)"
+          :checked="regime.requireStats"
+          @change="setRequireStats(tableIndex, $event.target.checked)"
         />
       </div>
 
