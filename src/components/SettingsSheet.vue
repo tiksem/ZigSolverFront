@@ -103,6 +103,38 @@ function placeholder(key) {
         </div>
       </div>
 
+      <!-- Empty = the net spends the solve budget above, so the placeholder
+           says that number rather than "server default". -->
+      <div class="row col">
+        <div class="lab">
+          <strong>{{ t('settings.netBudget') }}</strong>
+          <span class="desc" v-html="t('settings.netBudgetDesc')" />
+        </div>
+        <div class="ctl">
+          <div class="presets">
+            <button
+              v-for="b in BUDGET_PRESETS"
+              :key="b"
+              class="preset"
+              :class="{ on: settings.maxNetSolveTime === b }"
+              @click="setSetting('maxNetSolveTime', settings.maxNetSolveTime === b ? '' : b)"
+            >
+              {{ b }}s
+            </button>
+          </div>
+          <input
+            class="field num"
+            type="number"
+            min="0.5"
+            max="600"
+            step="0.5"
+            :placeholder="t('settings.netBudgetPlaceholder', { value: settings.maxSolveTime })"
+            :value="settings.maxNetSolveTime ?? ''"
+            @change="setSetting('maxNetSolveTime', $event.target.value)"
+          />
+        </div>
+      </div>
+
       <div class="row">
         <div class="lab">
           <strong>{{ t('settings.autoSolve') }}</strong>

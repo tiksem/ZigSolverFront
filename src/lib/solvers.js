@@ -22,24 +22,43 @@ export const SOLVER_TONES = {
   // chart with its stack-off decided by the same calculator.
   'preflop-allin': { tone: 'ok', quality: 'exploit' },
   'chart+allin': { tone: 'ok', quality: 'chart' },
+  // Preflop, deeper stacks: an exact lookup in the presolved blueprint grid.
+  blueprint: { tone: 'good', quality: 'exact' },
   exact: { tone: 'good', quality: 'exact' },
   exploit: { tone: 'ok', quality: 'exploit' },
   net: { tone: 'ok', quality: 'net' },
   'exact-thinned': { tone: 'good', quality: 'exact' },
   'net-thinned': { tone: 'ok', quality: 'net' },
+  // Heads-up with preflop all-in players still contesting main pots.
+  'exact-allin': { tone: 'good', quality: 'exact' },
   'flop-full': { tone: 'good', quality: 'mccfr' },
   'flop-shove-turn-river': { tone: 'ok', quality: 'mccfr' },
   'flop-shove-turn-river-cap1': { tone: 'ok', quality: 'mccfr' },
   'flop-shove-turn-cap1': { tone: 'ok', quality: 'mccfr' },
+  // The continuation-lines leaf: every player picks a plan for the rest of the
+  // hand instead of checking it down -- roughly half the checkdown leaf's
+  // distance from a full-menu solve at 4-5 players, below the shove/fold rungs.
+  'flop-lines': { tone: 'ok', quality: 'mccfr' },
+  'flop-lines-cap1': { tone: 'ok', quality: 'mccfr' },
+  'flop-lines-cap1-1size': { tone: 'ok', quality: 'mccfr' },
   'flop-checkdown': { tone: 'weak', quality: 'mccfr' },
+  'flop-checkdown-cap1': { tone: 'weak', quality: 'mccfr' },
+  'flop-checkdown-cap1-1size': { tone: 'weak', quality: 'mccfr' },
   'turn-unabstracted': { tone: 'good', quality: 'mccfr' },
   'turn-full-fine': { tone: 'good', quality: 'mccfr' },
   'turn-full': { tone: 'ok', quality: 'mccfr' },
   'turn-shove-river': { tone: 'weak', quality: 'mccfr' },
+  'turn-lines-river': { tone: 'ok', quality: 'mccfr' },
+  'turn-lines-river-cap1': { tone: 'ok', quality: 'mccfr' },
+  'turn-lines-river-cap1-1size': { tone: 'ok', quality: 'mccfr' },
   'turn-checkdown-river': { tone: 'weak', quality: 'mccfr' },
+  'turn-checkdown-river-cap1': { tone: 'weak', quality: 'mccfr' },
+  'turn-checkdown-river-cap1-1size': { tone: 'weak', quality: 'mccfr' },
   'river-unabstracted': { tone: 'good', quality: 'mccfr' },
   'river-full-fine': { tone: 'good', quality: 'mccfr' },
   'river-full': { tone: 'ok', quality: 'mccfr' },
+  'river-full-cap1': { tone: 'ok', quality: 'mccfr' },
+  'river-full-cap1-1size': { tone: 'ok', quality: 'mccfr' },
 }
 
 const UNDERTRAINED_TONE = { tone: 'weak', quality: 'mccfr' }

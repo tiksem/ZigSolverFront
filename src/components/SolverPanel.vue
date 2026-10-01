@@ -275,6 +275,9 @@ const facts = computed(() => {
   push('infosets', m.infosets != null ? Number(m.infosets).toLocaleString() : null)
   push('itersPerInfoset', m.itersPerInfoset)
   push('depthLimit', m.depthLimit)
+  // What stands in past the limit: "lines" (each player commits to a plan for
+  // the rest of the hand) or "checkdown" -- the API's `meta.depthValue`.
+  push('depthValue', m.depthValue)
   push(
     'thinnedFrom',
     m.thinnedFrom

@@ -369,6 +369,7 @@ does at the endpoint:
 | setting | request field |
 |---|---|
 | Solve budget | `maxSolveTime` — which regime the balancer can afford |
+| Net solve budget | `maxNetSolveTime` — how long the net solve itself runs (setup and range generation excluded) when the balancer settles on it (empty = the solve budget) |
 | Solve every snapshot | auto-solve on arrival, or only on demand |
 | Cancel superseded solves | whether to `POST /cancel` on supersede |
 | Per-hand tree cache | `handId` — reuse the solved tree across streets and reads |

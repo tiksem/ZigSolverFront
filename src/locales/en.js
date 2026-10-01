@@ -476,6 +476,7 @@ export default {
     infosets: 'Infosets',
     itersPerInfoset: 'Iters / infoset',
     depthLimit: 'Depth limit',
+    depthValue: 'Past the limit',
     thinnedFrom: 'Thinned from',
     thinnedValue: '{n}-way at the {street}',
     narrowedOn: 'Narrowed on',
@@ -563,6 +564,15 @@ export default {
       'with clustered turn runouts, then the net-truncated flow. Three-way pots ladder the same ' +
       'way over the blueprint’s betting menus. More time buys a better answer, not a different ' +
       'question.',
+    netBudget: 'Net solve budget',
+    netBudgetDesc:
+      '<code>maxNetSolveTime</code> — seconds, used only when the balancer settles on the ' +
+      'net-truncated flow. The ladder is still priced against the solve budget above, so this ' +
+      'does not change which regime runs — only how long the net solve gets once it does. It ' +
+      'times the solve <b>itself</b>: range generation, building the tree and loading the net ' +
+      'come on top. The net keeps improving with every second, so it can be worth more time ' +
+      'than an exact solve needs. Leave empty to give it the solve budget. Flop only.',
+    netBudgetPlaceholder: '= {value}s',
     autoSolve: 'Solve every snapshot',
     autoSolveDesc:
       'Send each snapshot to the API the moment it arrives. Off, the table still draws and only ' +
@@ -930,6 +940,14 @@ export default {
         'BB flatting a single raiser when nobody else is in. The opponents’ VPIP / PFR / ' +
         'ATS / 3BET bend the widths. There is no GTO twin preflop: the chart IS the baseline.',
     },
+    blueprint: {
+      title: 'Preflop blueprint',
+      summary: 'An exact preflop solve, looked up in the presolved grid.',
+      detail:
+        'The preflop service has a presolved blueprint covering this spot, so the answer is ' +
+        'that solve’s own strategy rather than the chart. Used only when the service is ' +
+        'configured and its grid covers the spot; everything else stays on the chart.',
+    },
     exact: {
       title: 'Exact CFR',
       summary: 'Heads-up, solved exactly by the CPU/GPU CFR engine.',
@@ -984,6 +1002,15 @@ export default {
         'for the budget available. Turn leaves come from the value net rather than a solved ' +
         'subtree.',
     },
+    'exact-allin': {
+      title: 'Exact solve — all-in players in the pot',
+      summary: 'Two players with chips left, plus preflop all-ins contesting main pots.',
+      detail:
+        'Postflop is heads-up between the two players who still have chips, but the players ' +
+        'who went all-in preflop still hold cards. The exact 2-player engine solves it with ' +
+        'their ranges contesting the main pots they are in, so each pot is priced against ' +
+        'everyone who can win it.',
+    },
     'flop-full': {
       title: 'MCCFR blueprint — full menu',
       summary: '3-way flop on the top rung: the full betting menu, 100 card buckets.',
@@ -1031,6 +1058,51 @@ export default {
         'maxSolveTime if you can. Measured error on the hero’s seat is about twice any rung ' +
         'that keeps postflop betting, so this one is worth spending budget to escape.',
     },
+    'flop-checkdown-cap1': {
+      title: 'MCCFR blueprint — checkdown leaf, one raise',
+      summary: 'No betting after the flop, and the flop capped at one raise per street.',
+      detail:
+        'A 4–6-way budget rung: the flop raise chain is cut to one raise so the tree fits the ' +
+        'budget. The checkdown caveat above applies in full — the answer knows nothing about ' +
+        'later streets.',
+    },
+    'flop-checkdown-cap1-1size': {
+      title: 'MCCFR blueprint — checkdown leaf, one raise, one size',
+      summary: 'The cheapest multiway rung: one raise, a single 50% flop bet, no later betting.',
+      detail:
+        'The last resort at 4–6 players, when even the capped rung does not fit the budget. ' +
+        'Treat the frequencies as a rough guide.',
+    },
+    'flop-lines': {
+      title: 'MCCFR blueprint — continuation-lines leaf',
+      summary:
+        'The flop is solved; after it, every player commits to one of four plans for the turn ' +
+        'and river.',
+      detail:
+        'The multiway rung that replaces the checkdown leaf. Instead of assuming nobody bets ' +
+        'after the flop, each player still in the hand picks a plan for the rest of it — ' +
+        'check-call, check-fold, bet 75% of the pot on each street, or jam — and the plans ' +
+        'are played out to a real showdown. The choice is learned per hand, so strong hands ' +
+        'can plan to get value and weak ones to bluff or give up. Against full-menu solves ' +
+        'at 4–5 players it sits roughly half as far off as the checkdown leaf. Where the ' +
+        'shove/fold rungs fit the budget they are still better facing a bet, because they ' +
+        'play the turn for real.',
+    },
+    'flop-lines-cap1': {
+      title: 'MCCFR blueprint — continuation-lines leaf, one raise',
+      summary: 'Same as the rung above, with the flop capped at a single raise per street.',
+      detail:
+        'Taken when the uncapped lines rung does not fit the budget. At this table width a ' +
+        'street’s size is its number of betting sequences, and the raise chain is the ' +
+        'longest of them, so one raise is the cheap cut.',
+    },
+    'flop-lines-cap1-1size': {
+      title: 'MCCFR blueprint — continuation-lines leaf, one raise, one size',
+      summary: 'One raise per street and a single 50% flop bet; the plans take over after it.',
+      detail:
+        'The cheapest lines rung. The flop keeps a real bet, raise and all-in decision at one ' +
+        'size, and everything past it is played by the committed plans.',
+    },
     'turn-unabstracted': {
       title: 'MCCFR turn — no card abstraction',
       summary: 'Turn-rooted blueprint with the card abstraction dropped entirely.',
@@ -1065,6 +1137,35 @@ export default {
       summary: 'No river betting at all.',
       detail: 'The cheapest turn rung. The river is checked down in the model.',
     },
+    'turn-checkdown-river-cap1': {
+      title: 'MCCFR turn — river checkdown, one raise',
+      summary: 'No river betting, and the turn capped at one raise per street.',
+      detail: 'A 4–6-way budget rung. The river is checked down in the model.',
+    },
+    'turn-checkdown-river-cap1-1size': {
+      title: 'MCCFR turn — river checkdown, one raise, one size',
+      summary: 'The cheapest multiway turn rung: one raise, a single 50% turn bet.',
+      detail: 'The last resort at 4–6 players. The river is checked down in the model.',
+    },
+    'turn-lines-river': {
+      title: 'MCCFR turn — continuation-lines river',
+      summary: 'The turn is solved; on the river every player commits to one of four plans.',
+      detail:
+        'The turn counterpart of the flop lines rung. Instead of checking the river down, ' +
+        'each player picks check-call, check-fold, bet 75% of the pot or jam for the river, ' +
+        'played out to a real showdown. Against full-menu solves at 5 players it sits about ' +
+        '30–60% closer than the checkdown river.',
+    },
+    'turn-lines-river-cap1': {
+      title: 'MCCFR turn — continuation-lines river, one raise',
+      summary: 'Same as the rung above, with the turn capped at a single raise per street.',
+      detail: 'Taken when the uncapped lines rung does not fit the budget.',
+    },
+    'turn-lines-river-cap1-1size': {
+      title: 'MCCFR turn — continuation-lines river, one raise, one size',
+      summary: 'One raise per street and a single 50% turn bet; the plans take the river.',
+      detail: 'The cheapest lines rung on the turn.',
+    },
     'river-unabstracted': {
       title: 'MCCFR river — no card abstraction',
       summary: 'A 3-way river solved with every combo as its own infoset.',
@@ -1081,6 +1182,18 @@ export default {
       title: 'MCCFR river — 100 buckets',
       summary: 'River-rooted, full menu, coarse abstraction.',
       detail: 'All sizes available; combos pooled into 100 buckets.',
+    },
+    'river-full-cap1': {
+      title: 'MCCFR river — 100 buckets, one raise',
+      summary: 'River-rooted, full menu, the raise chain capped at one raise.',
+      detail:
+        'A 4–6-way budget rung. The river is still solved for real; only the re-raise depth ' +
+        'is cut.',
+    },
+    'river-full-cap1-1size': {
+      title: 'MCCFR river — one raise, one size',
+      summary: 'River-rooted, one raise and a single 50% bet size.',
+      detail: 'The cheapest 4–6-way river rung.',
     },
     undertrained: {
       title: 'Undertrained',
